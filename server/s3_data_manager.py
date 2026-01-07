@@ -129,7 +129,9 @@ class S3DataManager:
         if subdir:
             parts.append(subdir)
         parts.append(filename)
-        return '/'.join(parts)
+        key = '/'.join(parts)
+        # 确保 key 不以 / 开头
+        return key.lstrip('/')
     
     async def save_bytes(self, bytes_data: bytes, filename: str, subdir: Optional[str] = None) -> str:
         """

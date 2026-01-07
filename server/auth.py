@@ -81,8 +81,9 @@ class AuthManager:
     async def _load_users_async(self) -> bytes:
         """异步加载用户数据"""
         try:
-            if await self.data_manager.file_exists(self.storage_filename, "batches"):
-                return await self.data_manager.load_bytes(self.storage_filename, "batches")
+            # users.json 存储在根目录，不使用子目录
+            if await self.data_manager.file_exists(self.storage_filename):
+                return await self.data_manager.load_bytes(self.storage_filename)
             return None
         except Exception as e:
             logger.error(f"Failed to load users from S3: {e}")
@@ -119,7 +120,8 @@ class AuthManager:
     async def _save_users_async(self, data: bytes):
         """异步保存用户数据"""
         try:
-            await self.data_manager.save_bytes(data, self.storage_filename, "batches")
+            # users.json 存储在根目录，不使用子目录
+            await self.data_manager.save_bytes(data, self.storage_filename)
         except Exception as e:
             logger.error(f"Failed to save users to S3: {e}")
             raise
