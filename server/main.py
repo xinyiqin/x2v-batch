@@ -123,7 +123,7 @@ app = FastAPI(title="AI Vision Batch Service")
 
 @app.on_event("startup")
 async def startup_event():
-    """应用启动时初始化 S3 连接"""
+    """应用启动时初始化 S3 连接和加载数据"""
     # 检查是否是 S3DataManager（需要动态检查，因为可能延迟导入）
     if hasattr(data_manager, 'init') and callable(getattr(data_manager, 'init', None)):
         try:
@@ -132,6 +132,18 @@ async def startup_event():
         except AttributeError:
             # 不是 S3DataManager，跳过
             pass
+    
+    # 如果是 S3 存储，异步加载用户和批次数据
+    if STORAGE_TYPE == "s3":
+        try:
+            await auth_manager.ensure_users_loaded()
+        except Exception as e:
+            logger.error(f"Failed to load users on startup: {e}")
+        
+        try:
+            await task_manager.ensure_batches_loaded()
+        except Exception as e:
+            logger.error(f"Failed to load batches on startup: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_event():

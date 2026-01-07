@@ -49,6 +49,7 @@ class S3DataManager:
         self.base_path = self.config.get("base_path", "")
         self.region = self.config.get("region", None)
         self.cdn_url = self.config.get("cdn_url", "")
+        self.addressing_style = self.config.get("addressing_style", None)
         self.connect_timeout = self.config.get("connect_timeout", 60)
         self.read_timeout = self.config.get("read_timeout", 60)
         self.write_timeout = self.config.get("write_timeout", 10)
@@ -68,6 +69,11 @@ class S3DataManager:
             logger.info(f"Initializing S3 client for bucket: {self.bucket_name}")
             
             s3_config = {"payload_signing_enabled": True}
+            # 火山引擎 TOS 需要 addressing_style
+            if self.addressing_style:
+                s3_config["addressing_style"] = self.addressing_style
+                logger.debug(f"Using addressing_style: {self.addressing_style}")
+            
             self.session = aioboto3.Session()
             self.s3_client = await self.session.client(
                 "s3",
@@ -319,11 +325,24 @@ class S3DataManager:
         if not self._initialized:
             await self.init()
         
-        prefix = self._get_key("", subdir)
+        # 构建前缀路径
+        parts = []
+        if self.base_path:
+            base = self.base_path.strip('/')
+            if base:
+                parts.append(base)
+        if subdir:
+            sub = subdir.strip('/')
+            if sub:
+                parts.append(sub)
+        
+        prefix = '/'.join(parts)
         if prefix and not prefix.endswith('/'):
             prefix += '/'
         elif not prefix:
             prefix = ""
+        
+        logger.debug(f"Listing files with prefix: '{prefix}'")
         
         files = []
         continuation_token = None

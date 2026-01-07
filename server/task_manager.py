@@ -319,15 +319,50 @@ class TaskManager:
         self.storage_dir = Path(storage_dir)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
         self.data_manager = data_manager
+        self._batches_loaded = False
         
         # 内存中的批次缓存
         self._batches: Dict[str, Batch] = {}
         
-        # 加载已存在的批次
-        self._load_batches()
+        # 加载已存在的批次（如果是本地存储，立即加载；如果是 S3，延迟到异步上下文）
+        if not self.data_manager:
+            # 本地存储，可以同步加载
+            self._load_batches()
+            logger.info(f"TaskManager initialized with {len(self._batches)} batches (storage: local)")
+        else:
+            # S3 存储，延迟加载
+            logger.info("TaskManager initialized (storage: S3, will load batches asynchronously)")
+    
+    async def ensure_batches_loaded(self):
+        """确保批次数据已加载（用于 S3 存储的异步加载）"""
+        if self._batches_loaded:
+            return
         
-        storage_type = "S3" if data_manager else "local"
-        logger.info(f"TaskManager initialized with {len(self._batches)} batches (storage: {storage_type})")
+        if self.data_manager:
+            # 异步加载批次数据
+            try:
+                files = await self._load_batches_async()
+                
+                # 加载每个批次
+                for filename in files:
+                    if filename.endswith('.json'):
+                        batch_id = filename[:-5]  # 移除 .json 后缀
+                        # 跳过 users.json（用户数据文件，不是批次文件）
+                        if batch_id == 'users':
+                            continue
+                        try:
+                            data_bytes = await self._load_batch_async(batch_id)
+                            if data_bytes:
+                                data = json.loads(data_bytes.decode('utf-8'))
+                                batch = Batch.from_dict(data)
+                                self._batches[batch.id] = batch
+                        except Exception as e:
+                            logger.error(f"Failed to load batch {batch_id}: {e}")
+            except Exception as e:
+                logger.error(f"Failed to load batches from S3: {e}")
+        
+        self._batches_loaded = True
+        logger.info(f"TaskManager loaded {len(self._batches)} batches (storage: S3)")
     
     def _get_batch_file(self, batch_id: str) -> Path:
         """获取批次文件路径"""
@@ -339,18 +374,68 @@ class TaskManager:
             # 使用 DataManager（可能是 S3）
             try:
                 # 列出所有批次文件
+                # 为每个线程创建独立的事件循环，避免事件循环关闭问题
+                def run_list_async():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        result = loop.run_until_complete(self._load_batches_async())
+                        # 确保所有任务都完成
+                        pending = asyncio.all_tasks(loop)
+                        if pending:
+                            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        return result
+                    finally:
+                        # 确保所有任务完成后再关闭
+                        try:
+                            pending = asyncio.all_tasks(loop)
+                            if pending:
+                                for task in pending:
+                                    task.cancel()
+                                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        except Exception:
+                            pass
+                        finally:
+                            loop.close()
+                
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, self._load_batches_async())
+                    future = executor.submit(run_list_async)
                     files = future.result()
                 
                 # 加载每个批次
                 for filename in files:
                     if filename.endswith('.json'):
                         batch_id = filename[:-5]  # 移除 .json 后缀
+                        # 跳过 users.json（用户数据文件，不是批次文件）
+                        if batch_id == 'users':
+                            continue
                         try:
+                            def run_load_async():
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                                try:
+                                    result = loop.run_until_complete(self._load_batch_async(batch_id))
+                                    # 确保所有任务都完成
+                                    pending = asyncio.all_tasks(loop)
+                                    if pending:
+                                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                                    return result
+                                finally:
+                                    # 确保所有任务完成后再关闭
+                                    try:
+                                        pending = asyncio.all_tasks(loop)
+                                        if pending:
+                                            for task in pending:
+                                                task.cancel()
+                                            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                                    except Exception:
+                                        pass
+                                    finally:
+                                        loop.close()
+                            
                             with concurrent.futures.ThreadPoolExecutor() as executor:
-                                future = executor.submit(asyncio.run, self._load_batch_async(batch_id))
+                                future = executor.submit(run_load_async)
                                 data_bytes = future.result()
                             
                             if data_bytes:
@@ -396,9 +481,33 @@ class TaskManager:
             try:
                 data = json.dumps(batch.to_dict(), ensure_ascii=False, indent=2).encode('utf-8')
                 filename = f"{batch.id}.json"
+                # 为每个线程创建独立的事件循环，避免事件循环关闭问题
+                def run_async():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        result = loop.run_until_complete(self._save_batch_async(filename, data))
+                        # 确保所有任务都完成
+                        pending = asyncio.all_tasks(loop)
+                        if pending:
+                            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        return result
+                    finally:
+                        # 确保所有任务完成后再关闭
+                        try:
+                            pending = asyncio.all_tasks(loop)
+                            if pending:
+                                for task in pending:
+                                    task.cancel()
+                                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        except Exception:
+                            pass
+                        finally:
+                            loop.close()
+                
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, self._save_batch_async(filename, data))
+                    future = executor.submit(run_async)
                     future.result()
             except Exception as e:
                 logger.error(f"Failed to save batch to data_manager: {e}")

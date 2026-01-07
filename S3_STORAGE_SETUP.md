@@ -51,7 +51,8 @@ S3_CONFIG='{
   "endpoint_url": "https://s3.amazonaws.com",
   "bucket_name": "your-bucket-name",
   "base_path": "x2v-batch",
-  "region": "us-east-1"
+  "region": "us-east-1",
+  "addressing_style": "virtual"
 }'
 ```
 

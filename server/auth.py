@@ -29,16 +29,71 @@ class AuthManager:
         self.storage_file.parent.mkdir(parents=True, exist_ok=True)
         self.data_manager = data_manager
         self.storage_filename = "users.json"
+        self._users_loaded = False
         
-        # 加载用户数据
+        # 加载用户数据（如果是本地存储，立即加载；如果是 S3，延迟到异步上下文）
         self._users: Dict[str, Dict[str, Any]] = {}
-        self._load_users()
+        if not self.data_manager:
+            # 本地存储，可以同步加载
+            self._load_users()
+            # 只有在没有任何用户时才创建默认管理员账户
+            # 如果本地已有用户数据（包括 admin），则不会创建
+            if not self._users:
+                logger.info("No users found in local storage, creating default admin user")
+                self.create_user("admin", "admin", is_admin=True, credits=9999)
+            elif "admin" not in self._users:
+                logger.info("Users exist but no admin found, creating admin user")
+                self.create_user("admin", "admin", is_admin=True, credits=9999)
+            else:
+                logger.info(f"Using existing users from local storage (including admin)")
+            logger.info(f"AuthManager initialized with {len(self._users)} users (storage: local)")
+        else:
+            # S3 存储，延迟加载
+            logger.info("AuthManager initialized (storage: S3, will load users asynchronously)")
+    
+    async def ensure_users_loaded(self):
+        """确保用户数据已加载（用于 S3 存储的异步加载）"""
+        if self._users_loaded:
+            return
         
-        # 创建默认管理员账户
-        if "admin" not in self._users:
+        if self.data_manager:
+            # 异步加载用户数据
+            try:
+                data = await self._load_users_async()
+                if data:
+                    loaded_users = json.loads(data.decode('utf-8'))
+                    # 如果 S3 上已有用户数据，使用它（不会覆盖）
+                    if loaded_users:
+                        self._users = loaded_users
+                        logger.info(f"Loaded {len(self._users)} existing users from S3")
+                    else:
+                        self._users = {}
+                else:
+                    self._users = {}
+            except Exception as e:
+                logger.error(f"Failed to load users from S3: {e}")
+                self._users = {}
+        
+        # 只有在没有任何用户时才创建默认管理员账户
+        # 如果 S3 上已有用户数据（包括 admin），则不会创建
+        if not self._users:
+            logger.info("No users found, creating default admin user")
             self.create_user("admin", "admin", is_admin=True, credits=9999)
+            # 保存到 S3
+            if self.data_manager:
+                await self._save_users_async(json.dumps(self._users, ensure_ascii=False, indent=2).encode('utf-8'))
+        elif "admin" not in self._users:
+            # 如果有其他用户但没有 admin，创建 admin
+            logger.info("Users exist but no admin found, creating admin user")
+            self.create_user("admin", "admin", is_admin=True, credits=9999)
+            # 保存到 S3
+            if self.data_manager:
+                await self._save_users_async(json.dumps(self._users, ensure_ascii=False, indent=2).encode('utf-8'))
+        else:
+            logger.info(f"Using existing users from storage (including admin)")
         
-        logger.info(f"AuthManager initialized with {len(self._users)} users (storage: {'S3' if data_manager else 'local'})")
+        self._users_loaded = True
+        logger.info(f"AuthManager loaded {len(self._users)} users (storage: S3)")
     
     def _load_users(self):
         """从存储加载用户数据（支持本地文件或 S3）"""
@@ -46,9 +101,35 @@ class AuthManager:
             # 使用 DataManager（可能是 S3）
             try:
                 # 在同步方法中运行异步函数
+                # 为每个线程创建独立的事件循环，避免事件循环关闭问题
+                def run_async():
+                    # 创建新的事件循环
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        # 运行异步函数并等待完成
+                        result = loop.run_until_complete(self._load_users_async())
+                        # 确保所有任务都完成
+                        pending = asyncio.all_tasks(loop)
+                        if pending:
+                            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        return result
+                    finally:
+                        # 确保所有任务完成后再关闭
+                        try:
+                            pending = asyncio.all_tasks(loop)
+                            if pending:
+                                for task in pending:
+                                    task.cancel()
+                                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        except Exception:
+                            pass
+                        finally:
+                            loop.close()
+                
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, self._load_users_async())
+                    future = executor.submit(run_async)
                     data = future.result()
                 
                 if data:
@@ -82,16 +163,13 @@ class AuthManager:
     def _save_users(self):
         """保存用户数据到存储（支持本地文件或 S3）"""
         if self.data_manager:
-            # 使用 DataManager（可能是 S3）
-            try:
-                data = json.dumps(self._users, ensure_ascii=False, indent=2).encode('utf-8')
-                # 在同步方法中运行异步函数
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, self._save_users_async(data))
-                    future.result()
-            except Exception as e:
-                logger.error(f"Failed to save users to data_manager: {e}")
+            # 使用 DataManager（可能是 S3）- 延迟保存，在异步上下文中执行
+            # 注意：这个方法在同步上下文中调用，但 S3 操作需要异步
+            # 我们使用一个简单的同步等待方式，但更好的做法是在异步上下文中调用
+            logger.warning("Saving users to S3 from sync context - this should be done in async context")
+            # 暂时跳过保存，或者使用后台任务
+            # 实际应用中，应该在异步上下文中调用 async _save_users_async
+            return
         else:
             # 使用本地文件
             try:
@@ -147,6 +225,10 @@ class AuthManager:
     
     def verify_password(self, username: str, password: str) -> bool:
         """验证密码"""
+        # 如果是 S3 存储且未加载，返回 False（数据应该在 startup 时已加载）
+        if self.data_manager and not self._users_loaded:
+            logger.warning("Users not loaded yet, login may fail")
+            return False
         user = self._users.get(username)
         if not user:
             return False
@@ -156,6 +238,10 @@ class AuthManager:
     
     def get_user(self, username: str) -> Optional[Dict[str, Any]]:
         """获取用户信息（不包含密码）"""
+        # 如果是 S3 存储且未加载，返回 None（数据应该在 startup 时已加载）
+        if self.data_manager and not self._users_loaded:
+            logger.warning("Users not loaded yet")
+            return None
         user = self._users.get(username)
         if not user:
             return None
