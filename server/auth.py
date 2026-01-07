@@ -5,6 +5,7 @@ import hashlib
 import secrets
 import jwt
 import asyncio
+import os
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from pathlib import Path
@@ -30,20 +31,22 @@ class AuthManager:
         self.data_manager = data_manager
         self.storage_filename = "users.json"
         self._users_loaded = False
+        # 从环境变量获取管理员初始密码，默认使用 admin8888
+        self.admin_password = os.getenv("ADMIN_PASSWORD", "admin8888")
         
         # 加载用户数据（如果是本地存储，立即加载；如果是 S3，延迟到异步上下文）
         self._users: Dict[str, Dict[str, Any]] = {}
         if not self.data_manager:
             # 本地存储，可以同步加载
-            self._load_users()
+        self._load_users()
             # 只有在没有任何用户时才创建默认管理员账户
             # 如果本地已有用户数据（包括 admin），则不会创建
             if not self._users:
                 logger.info("No users found in local storage, creating default admin user")
-                self.create_user("admin", "admin8888", is_admin=True, credits=9999)
+                self.create_user("admin", self.admin_password, is_admin=True, credits=9999)
             elif "admin" not in self._users:
                 logger.info("Users exist but no admin found, creating admin user")
-                self.create_user("admin", "admin8888", is_admin=True, credits=9999)
+                self.create_user("admin", self.admin_password, is_admin=True, credits=9999)
             else:
                 logger.info(f"Using existing users from local storage (including admin)")
             logger.info(f"AuthManager initialized with {len(self._users)} users (storage: local)")
@@ -78,14 +81,14 @@ class AuthManager:
         # 如果 S3 上已有用户数据（包括 admin），则不会创建
         if not self._users:
             logger.info("No users found, creating default admin user")
-            self.create_user("admin", "admin8888", is_admin=True, credits=9999)
+            self.create_user("admin", self.admin_password, is_admin=True, credits=9999)
             # 保存到 S3
             if self.data_manager:
                 await self._save_users_async(json.dumps(self._users, ensure_ascii=False, indent=2).encode('utf-8'))
         elif "admin" not in self._users:
             # 如果有其他用户但没有 admin，创建 admin
             logger.info("Users exist but no admin found, creating admin user")
-            self.create_user("admin", "admin8888", is_admin=True, credits=9999)
+            self.create_user("admin", self.admin_password, is_admin=True, credits=9999)
             # 保存到 S3
             if self.data_manager:
                 await self._save_users_async(json.dumps(self._users, ensure_ascii=False, indent=2).encode('utf-8'))
@@ -141,13 +144,13 @@ class AuthManager:
                 self._users = {}
         else:
             # 使用本地文件
-            if self.storage_file.exists():
-                try:
-                    with open(self.storage_file, "r", encoding="utf-8") as f:
-                        self._users = json.load(f)
-                except Exception as e:
-                    logger.error(f"Failed to load users: {e}")
-                    self._users = {}
+        if self.storage_file.exists():
+            try:
+                with open(self.storage_file, "r", encoding="utf-8") as f:
+                    self._users = json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to load users: {e}")
+                self._users = {}
     
     async def _load_users_async(self) -> bytes:
         """异步加载用户数据"""
@@ -172,11 +175,11 @@ class AuthManager:
             return
         else:
             # 使用本地文件
-            try:
-                with open(self.storage_file, "w", encoding="utf-8") as f:
-                    json.dump(self._users, f, ensure_ascii=False, indent=2)
-            except Exception as e:
-                logger.error(f"Failed to save users: {e}")
+        try:
+            with open(self.storage_file, "w", encoding="utf-8") as f:
+                json.dump(self._users, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save users: {e}")
     
     async def _save_users_async(self, data: bytes):
         """异步保存用户数据"""

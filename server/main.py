@@ -49,11 +49,14 @@ def init_data_directory():
             def hash_password(password: str) -> str:
                 return hashlib.sha256(password.encode()).hexdigest()
             
+            # 从环境变量获取管理员初始密码，默认使用 admin8888
+            admin_password = os.getenv("ADMIN_PASSWORD", "admin8888")
+            
             default_users = {
                 "admin": {
                     "id": "u-0",
                     "username": "admin",
-                    "password_hash": hash_password("admin8888"),
+                    "password_hash": hash_password(admin_password),
                     "credits": 9999,
                     "is_admin": True,
                     "created_at": "2026-01-01T00:00:00"
