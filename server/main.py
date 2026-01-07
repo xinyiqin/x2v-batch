@@ -18,10 +18,66 @@ from server.data_manager import LocalDataManager
 from server.task_manager import TaskManager
 from server.batch_processor import BatchProcessor
 
+# 初始化数据目录（首次启动时）
+def init_data_directory():
+    """初始化数据目录和初始数据"""
+    data_dir = os.getenv("DATA_DIR", "./data")
+    try:
+        # 导入并运行初始化脚本
+        import sys
+        from pathlib import Path
+        project_root = Path(__file__).parent.parent
+        sys.path.insert(0, str(project_root))
+        
+        # 直接调用初始化逻辑，避免导入问题
+        from pathlib import Path as PathLib
+        base_path = PathLib(data_dir)
+        base_path.mkdir(parents=True, exist_ok=True)
+        
+        # 创建子目录
+        for subdir in ["images", "audios", "videos", "batches"]:
+            (base_path / subdir).mkdir(parents=True, exist_ok=True)
+        
+        # 初始化 users.json（如果不存在）
+        users_file = base_path / "users.json"
+        if not users_file.exists():
+            import hashlib
+            import json
+            def hash_password(password: str) -> str:
+                return hashlib.sha256(password.encode()).hexdigest()
+            
+            default_users = {
+                "admin": {
+                    "id": "u-0",
+                    "username": "admin",
+                    "password_hash": hash_password("admin8888"),
+                    "credits": 9999,
+                    "is_admin": True,
+                    "created_at": "2026-01-01T00:00:00"
+                },
+                "user1": {
+                    "id": "u-1",
+                    "username": "user1",
+                    "password_hash": hash_password("lightx2v9999"),
+                    "credits": 10,
+                    "is_admin": False,
+                    "created_at": "2026-01-01T00:00:00"
+                }
+            }
+            with open(users_file, "w", encoding="utf-8") as f:
+                json.dump(default_users, f, indent=2, ensure_ascii=False)
+            logger.info("✅ Created default users.json with admin and user1")
+    except Exception as e:
+        logger.warning(f"Failed to initialize data directory: {e}")
+
+# 初始化数据目录
+init_data_directory()
+
 # 初始化组件
+data_dir = os.getenv("DATA_DIR", "./data")
 auth_manager = AuthManager()
-data_manager = LocalDataManager(base_dir="./data")
-task_manager = TaskManager(storage_dir="./data/batches")
+data_manager = LocalDataManager(base_dir=data_dir)
+task_manager = TaskManager(storage_dir=f"{data_dir}/batches")
 
 # S2V API 配置
 S2V_BASE_URL = os.getenv("LIGHTX2V_BASE_URL", "https://x2v.light-ai.top")

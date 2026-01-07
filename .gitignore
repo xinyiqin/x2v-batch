@@ -24,7 +24,15 @@ dist-ssr
 *.sw?
 
 # Data and temporary files
-data/
+# 保留 data 目录结构，但忽略其中的数据文件
+data/users.json
+data/batches/*.json
+data/images/*
+data/audios/*
+data/videos/*
+!data/.gitkeep
+!data/README.md
+!data/init_data.py
 *.pyc
 __pycache__/
 *.py[cod]
