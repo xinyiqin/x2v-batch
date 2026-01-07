@@ -1,15 +1,14 @@
 [phases.setup]
-nixPkgs = ["python311", "curl"]
+nixPkgs = ["python311"]
 
 [phases.install]
 cmds = [
-  "curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py",
-  "python get-pip.py",
-  "python -m pip install --upgrade pip",
-  "python -m pip install -r requirements.txt",
-  "rm get-pip.py"
+  "python -m venv /opt/venv",
+  "source /opt/venv/bin/activate",
+  "pip install --upgrade pip",
+  "pip install -r requirements.txt"
 ]
 
 [start]
-cmd = "cd server && python -m uvicorn server.main:app --host 0.0.0.0 --port $PORT"
+cmd = "cd server && /opt/venv/bin/python -m uvicorn server.main:app --host 0.0.0.0 --port $PORT"
 
