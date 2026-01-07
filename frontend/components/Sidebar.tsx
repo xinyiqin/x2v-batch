@@ -9,6 +9,7 @@ interface SidebarProps {
   onNewProject: () => void;
   onOpenAdmin: () => void;
   onLogout: () => void;
+  onOpenChangePassword: () => void;
   selectedId: string | null;
   lang: Language;
   setLang: (lang: Language) => void;
@@ -24,6 +25,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onNewProject, 
   onOpenAdmin,
   onLogout,
+  onOpenChangePassword,
   selectedId, 
   lang, 
   setLang,
@@ -115,7 +117,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       <div className="mt-auto p-5 border-t border-white/[0.06] bg-black/20 backdrop-blur-xl">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-3 overflow-hidden">
             <img src={`https://api.dicebear.com/7.x/initials/svg?seed=${username}`} alt="Avatar" className="w-10 h-10 rounded-full bg-white/[0.1] border border-white/[0.1]" />
             <div className="overflow-hidden">
@@ -123,13 +125,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <p className="text-[11px] text-gray-500">{t.proPlan}</p>
             </div>
           </div>
-          <button 
-            onClick={onLogout}
-            className="p-2 text-gray-500 hover:text-red-400 transition-colors rounded-lg hover:bg-white/[0.06]"
-            title={t.logout}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
-          </button>
+          <div className="flex items-center gap-1">
+            <button 
+              onClick={onOpenChangePassword}
+              className="p-2 text-gray-500 hover:text-[#90dce1] transition-colors rounded-lg hover:bg-white/[0.06]"
+              title={lang === 'zh' ? '修改密码' : 'Change Password'}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+            </button>
+            <button 
+              onClick={onLogout}
+              className="p-2 text-gray-500 hover:text-red-400 transition-colors rounded-lg hover:bg-white/[0.06]"
+              title={t.logout}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+            </button>
+          </div>
         </div>
       </div>
     </aside>

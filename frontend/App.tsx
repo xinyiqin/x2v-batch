@@ -5,6 +5,7 @@ import { BatchForm } from './components/BatchForm';
 import { BatchGallery } from './components/BatchGallery';
 import { AdminPanel } from './components/AdminPanel';
 import { Login } from './components/Login';
+import { ChangePasswordModal } from './components/ChangePasswordModal';
 import { Batch, ViewState, User } from './types';
 import { translations, Language } from './translations';
 import { getToken, clearToken, getProfile, getBatches, getAllUsers, getAllBatches } from './api';

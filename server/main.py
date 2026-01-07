@@ -226,6 +226,24 @@ async def login(username: str = Form(...), password: str = Form(...)):
 
 # ==================== 用户接口 ====================
 
+@app.post("/api/user/change-password")
+async def change_password(
+    old_password: str = Form(...),
+    new_password: str = Form(...),
+    user: dict = Depends(get_current_user)
+):
+    """修改当前用户密码"""
+    username = user["username"]
+    
+    if not auth_manager.change_password(username, old_password, new_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid old password"
+        )
+    
+    return {"success": True, "message": "Password changed successfully"}
+
+
 @app.get("/api/user/profile")
 async def get_profile(user: dict = Depends(get_current_user)):
     """获取当前用户信息"""

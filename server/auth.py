@@ -256,4 +256,29 @@ class AuthManager:
         except jwt.InvalidTokenError as e:
             logger.warning(f"Invalid token: {e}")
             return None
+    
+    def change_password(self, username: str, old_password: str, new_password: str) -> bool:
+        """
+        修改用户密码
+        
+        Args:
+            username: 用户名
+            old_password: 旧密码
+            new_password: 新密码
+            
+        Returns:
+            是否成功
+        """
+        if not self.verify_password(username, old_password):
+            return False
+        
+        if username not in self._users:
+            return False
+        
+        # 更新密码
+        self._users[username]["password_hash"] = self._hash_password(new_password)
+        self._save_users()
+        
+        logger.info(f"Password changed for user: {username}")
+        return True
 

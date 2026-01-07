@@ -150,6 +150,38 @@ export async function getProfile(): Promise<User> {
   return request<User>('/api/user/profile');
 }
 
+export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
+  const formData = new FormData();
+  formData.append('old_password', oldPassword);
+  formData.append('new_password', newPassword);
+  
+  const token = getToken();
+  const headers: HeadersInit = {};
+
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`${API_BASE}/api/user/change-password`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  });
+
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+    throw new Error('Unauthorized');
+  }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Failed to change password' }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  await response.json();
+}
+
 // ==================== 批次 API ====================
 
 export interface VideoItem {
