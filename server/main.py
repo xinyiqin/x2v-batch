@@ -77,7 +77,21 @@ init_data_directory()
 # 初始化组件
 data_dir = os.getenv("DATA_DIR", "./data")
 auth_manager = AuthManager()
-data_manager = LocalDataManager(base_dir=data_dir)
+
+# 选择数据管理器：S3 或本地
+STORAGE_TYPE = os.getenv("STORAGE_TYPE", "local").lower()
+if STORAGE_TYPE == "s3":
+    s3_config = os.getenv("S3_CONFIG")
+    if not s3_config:
+        logger.warning("STORAGE_TYPE=s3 but S3_CONFIG not set, falling back to local storage")
+        data_manager = LocalDataManager(base_dir=data_dir)
+    else:
+        data_manager = S3DataManager(s3_config)
+        logger.info("Using S3DataManager for storage (will initialize on startup)")
+else:
+    data_manager = LocalDataManager(base_dir=data_dir)
+    logger.info(f"Using LocalDataManager for storage (base_dir: {data_dir})")
+
 task_manager = TaskManager(storage_dir=f"{data_dir}/batches")
 
 # S2V API 配置
