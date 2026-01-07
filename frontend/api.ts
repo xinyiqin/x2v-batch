@@ -110,10 +110,26 @@ export async function login(username: string, password: string): Promise<LoginRe
     body: formData,
   });
 
+  // 检查响应类型
+  const contentType = response.headers.get('content-type');
+  if (!contentType || !contentType.includes('application/json')) {
+    // 如果返回的不是 JSON，可能是 HTML 错误页面
+    const text = await response.text();
+    console.error('Non-JSON response:', text.substring(0, 200));
+    throw new Error(`Server returned non-JSON response. Check API_BASE: ${API_BASE}`);
+  }
+
   // 登录接口的 401 不应该清除 token 和重载页面，应该显示错误
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: 'Login failed' }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
+    try {
+      const error = await response.json();
+      throw new Error(error.detail || `HTTP ${response.status}`);
+    } catch (e) {
+      if (e instanceof Error && e.message.includes('JSON')) {
+        throw e;
+      }
+      throw new Error(`Login failed: HTTP ${response.status}`);
+    }
   }
 
   const data = await response.json();
