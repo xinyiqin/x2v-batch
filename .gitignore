@@ -46,5 +46,6 @@ nginx.prod.conf
 start_prod.sh
 deploy.sh
 
-# Keep railway.json for Railway deployment
+# Keep railway.json and nixpacks.toml for Railway deployment
 # railway.json
+# nixpacks.toml

@@ -1,0 +1,12 @@
+# Root requirements.txt for Railway auto-detection
+# This file points to server/requirements.txt
+# Railway will use this to detect Python project
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.12
+pydantic>=2.10.0
+requests>=2.32.0
+loguru>=0.7.2
+PyJWT>=2.9.0
+
