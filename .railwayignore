@@ -1,0 +1,6 @@
+# Railway ignore file - force Nixpacks instead of Docker
+Dockerfile.backend
+Dockerfile.frontend
+docker-compose.yml
+docker-compose.simple.yml
+
