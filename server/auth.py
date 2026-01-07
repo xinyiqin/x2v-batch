@@ -38,7 +38,7 @@ class AuthManager:
         self._users: Dict[str, Dict[str, Any]] = {}
         if not self.data_manager:
             # 本地存储，可以同步加载
-        self._load_users()
+            self._load_users()
             # 只有在没有任何用户时才创建默认管理员账户
             # 如果本地已有用户数据（包括 admin），则不会创建
             if not self._users:
@@ -144,13 +144,13 @@ class AuthManager:
                 self._users = {}
         else:
             # 使用本地文件
-        if self.storage_file.exists():
-            try:
-                with open(self.storage_file, "r", encoding="utf-8") as f:
-                    self._users = json.load(f)
-            except Exception as e:
-                logger.error(f"Failed to load users: {e}")
-                self._users = {}
+            if self.storage_file.exists():
+                try:
+                    with open(self.storage_file, "r", encoding="utf-8") as f:
+                        self._users = json.load(f)
+                except Exception as e:
+                    logger.error(f"Failed to load users: {e}")
+                    self._users = {}
     
     async def _load_users_async(self) -> bytes:
         """异步加载用户数据"""
@@ -175,11 +175,11 @@ class AuthManager:
             return
         else:
             # 使用本地文件
-        try:
-            with open(self.storage_file, "w", encoding="utf-8") as f:
-                json.dump(self._users, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error(f"Failed to save users: {e}")
+            try:
+                with open(self.storage_file, "w", encoding="utf-8") as f:
+                    json.dump(self._users, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.error(f"Failed to save users: {e}")
     
     async def _save_users_async(self, data: bytes):
         """异步保存用户数据"""
