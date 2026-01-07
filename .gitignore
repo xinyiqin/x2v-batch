@@ -1,0 +1,48 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Data and temporary files
+data/
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment files
+.env
+.env.local
+
+# Deployment docs (not needed in repo)
+DEPLOY_SMALL_SCALE.md
+DEPLOY.md
+QUICK_DEPLOY.md
+README_DEPLOY.md
+railway.json
+render.yaml
+vercel.json
+docker-compose.simple.yml
+nginx.prod.conf
+start_prod.sh
+deploy.sh

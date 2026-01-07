@@ -1,0 +1,482 @@
+"""
+任务管理器 - 负责批次和子任务的管理
+支持 batch（批次）和 video_item（子任务）的层级结构
+"""
+import uuid
+import json
+import asyncio
+from datetime import datetime
+from enum import Enum
+from typing import Dict, List, Optional, Any
+from pathlib import Path
+from loguru import logger
+
+
+class VideoItemStatus(Enum):
+    """视频子项状态"""
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class BatchStatus(Enum):
+    """批次状态"""
+    CREATED = "created"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class VideoItem:
+    """视频子项"""
+    def __init__(
+        self,
+        item_id: str,
+        batch_id: str,
+        source_image_filename: str,
+        status: VideoItemStatus = VideoItemStatus.PENDING,
+        video_filename: Optional[str] = None,
+        video_url: Optional[str] = None,
+        error_msg: Optional[str] = None,
+        api_task_id: Optional[str] = None,
+    ):
+        self.id = item_id
+        self.batch_id = batch_id
+        self.source_image_filename = source_image_filename
+        self.status = status
+        self.video_filename = video_filename
+        self.video_url = video_url
+        self.error_msg = error_msg
+        self.api_task_id = api_task_id
+        self.created_at = datetime.now()
+        self.updated_at = datetime.now()
+        self.started_at: Optional[datetime] = None
+        self.completed_at: Optional[datetime] = None
+        # 估算的处理时间（秒），用于进度计算
+        self.estimated_duration: Optional[int] = None
+    
+    def get_progress(self) -> int:
+        """
+        获取当前进度百分比 (0-100)
+        
+        Returns:
+            进度百分比
+        """
+        if self.status == VideoItemStatus.COMPLETED:
+            return 100
+        elif self.status == VideoItemStatus.FAILED:
+            return 0
+        elif self.status == VideoItemStatus.PENDING:
+            return 0
+        elif self.status == VideoItemStatus.PROCESSING:
+            if self.started_at and self.estimated_duration:
+                # 基于已运行时间计算进度
+                elapsed = (datetime.now() - self.started_at).total_seconds()
+                progress = min((elapsed / self.estimated_duration) * 100, 95)  # 最多95%
+                return int(progress)
+            else:
+                # 如果没有时间信息，返回默认进度
+                return 50
+        return 0
+    
+    def get_elapsed_time(self) -> float:
+        """获取已运行时间（秒）"""
+        if self.started_at:
+            if self.completed_at:
+                return (self.completed_at - self.started_at).total_seconds()
+            else:
+                return (datetime.now() - self.started_at).total_seconds()
+        return 0.0
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "id": self.id,
+            "sourceImage": self.source_image_filename,
+            "videoUrl": self.video_url or "",
+            "status": self.status.value,
+            "error_msg": self.error_msg,
+            "api_task_id": self.api_task_id,
+            "progress": self.get_progress(),
+            "elapsed_time": self.get_elapsed_time(),
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "VideoItem":
+        """从字典创建"""
+        # 兼容旧数据格式：sourceImage 可能是字段名
+        source_image = data.get("source_image_filename") or data.get("sourceImage", "")
+        video_url = data.get("video_url") or data.get("videoUrl", "")
+        
+        item = cls(
+            item_id=data["id"],
+            batch_id=data.get("batch_id", ""),
+            source_image_filename=source_image,
+            status=VideoItemStatus(data.get("status", "pending")),
+            video_filename=data.get("video_filename"),
+            video_url=video_url,
+            error_msg=data.get("error_msg"),
+            api_task_id=data.get("api_task_id"),
+        )
+        if "created_at" in data and data["created_at"]:
+            try:
+                item.created_at = datetime.fromisoformat(data["created_at"])
+            except (ValueError, TypeError):
+                item.created_at = datetime.now()
+        if "updated_at" in data and data["updated_at"]:
+            try:
+                item.updated_at = datetime.fromisoformat(data["updated_at"])
+            except (ValueError, TypeError):
+                item.updated_at = datetime.now()
+        if "started_at" in data and data["started_at"]:
+            try:
+                item.started_at = datetime.fromisoformat(data["started_at"])
+            except (ValueError, TypeError):
+                item.started_at = None
+        if "completed_at" in data and data["completed_at"]:
+            try:
+                item.completed_at = datetime.fromisoformat(data["completed_at"])
+            except (ValueError, TypeError):
+                item.completed_at = None
+        if "estimated_duration" in data:
+            item.estimated_duration = data["estimated_duration"]
+        return item
+
+
+class Batch:
+    """批次"""
+    def __init__(
+        self,
+        batch_id: str,
+        user_id: str,
+        user_name: str,
+        name: str,
+        prompt: str,
+        audio_filename: str,
+        image_count: int,
+        items: Optional[List[VideoItem]] = None,
+        status: BatchStatus = BatchStatus.CREATED,
+    ):
+        self.id = batch_id
+        self.user_id = user_id
+        self.user_name = user_name
+        self.name = name
+        self.prompt = prompt
+        self.audio_filename = audio_filename
+        self.image_count = image_count
+        self.items = items or []
+        self.status = status
+        self.created_at = datetime.now()
+        self.updated_at = datetime.now()
+    
+    def get_overall_progress(self) -> int:
+        """
+        获取批次总体进度百分比 (0-100)
+        
+        Returns:
+            总体进度百分比
+        """
+        if not self.items:
+            return 0
+        
+        completed_count = sum(1 for item in self.items if item.status == VideoItemStatus.COMPLETED)
+        return int((completed_count / len(self.items)) * 100)
+    
+    def get_progress_info(self) -> Dict[str, Any]:
+        """
+        获取进度详细信息
+        
+        Returns:
+            包含进度信息的字典
+        """
+        if not self.items:
+            return {
+                "overall_progress": 0,
+                "total": 0,
+                "completed": 0,
+                "processing": 0,
+                "pending": 0,
+                "failed": 0,
+            }
+        
+        total = len(self.items)
+        completed = sum(1 for item in self.items if item.status == VideoItemStatus.COMPLETED)
+        processing = sum(1 for item in self.items if item.status == VideoItemStatus.PROCESSING)
+        pending = sum(1 for item in self.items if item.status == VideoItemStatus.PENDING)
+        failed = sum(1 for item in self.items if item.status == VideoItemStatus.FAILED)
+        
+        return {
+            "overall_progress": self.get_overall_progress(),
+            "total": total,
+            "completed": completed,
+            "processing": processing,
+            "pending": pending,
+            "failed": failed,
+        }
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        progress_info = self.get_progress_info()
+        return {
+            "id": self.id,
+            "userId": self.user_id,
+            "userName": self.user_name,
+            "name": self.name,
+            "timestamp": int(self.created_at.timestamp() * 1000),
+            "prompt": self.prompt,
+            "audioName": self.audio_filename,
+            "imageCount": self.image_count,
+            "status": self.status.value,
+            "progress": progress_info,
+            "items": [item.to_dict() for item in self.items],
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Batch":
+        """从字典创建"""
+        batch = cls(
+            batch_id=data["id"],
+            user_id=data["userId"],
+            user_name=data["userName"],
+            name=data["name"],
+            prompt=data["prompt"],
+            audio_filename=data["audioName"],
+            image_count=data["imageCount"],
+            status=BatchStatus(data.get("status", "created")),
+        )
+        if "items" in data:
+            batch.items = []
+            for item_data in data["items"]:
+                # 确保 batch_id 被设置
+                item_data["batch_id"] = batch.id
+                try:
+                    item = VideoItem.from_dict(item_data)
+                    batch.items.append(item)
+                except Exception as e:
+                    logger.error(f"Failed to load item from batch {batch.id}: {e}, item_data: {item_data}")
+                    # 继续处理其他 items
+        if "created_at" in data:
+            try:
+                batch.created_at = datetime.fromisoformat(data["created_at"])
+            except (ValueError, TypeError):
+                # 兼容时间戳格式
+                if isinstance(data["created_at"], (int, float)):
+                    batch.created_at = datetime.fromtimestamp(data["created_at"] / 1000 if data["created_at"] > 1e10 else data["created_at"])
+                else:
+                    batch.created_at = datetime.now()
+        if "updated_at" in data:
+            try:
+                batch.updated_at = datetime.fromisoformat(data["updated_at"])
+            except (ValueError, TypeError):
+                if isinstance(data["updated_at"], (int, float)):
+                    batch.updated_at = datetime.fromtimestamp(data["updated_at"] / 1000 if data["updated_at"] > 1e10 else data["updated_at"])
+                else:
+                    batch.updated_at = datetime.now()
+        return batch
+    
+    def update_status(self):
+        """根据子任务状态更新批次状态"""
+        if not self.items:
+            return
+        
+        statuses = [item.status for item in self.items]
+        
+        if all(s == VideoItemStatus.COMPLETED for s in statuses):
+            self.status = BatchStatus.COMPLETED
+        elif any(s == VideoItemStatus.FAILED for s in statuses):
+            if all(s in [VideoItemStatus.COMPLETED, VideoItemStatus.FAILED] for s in statuses):
+                self.status = BatchStatus.COMPLETED  # 部分失败也算完成
+            else:
+                self.status = BatchStatus.PROCESSING
+        elif any(s == VideoItemStatus.PROCESSING for s in statuses):
+            self.status = BatchStatus.PROCESSING
+        elif any(s == VideoItemStatus.PENDING for s in statuses):
+            self.status = BatchStatus.PROCESSING
+        
+        self.updated_at = datetime.now()
+
+
+class TaskManager:
+    """任务管理器"""
+    
+    def __init__(self, storage_dir: str = "./data/batches"):
+        """
+        初始化任务管理器
+        
+        Args:
+            storage_dir: 批次数据存储目录
+        """
+        self.storage_dir = Path(storage_dir)
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 内存中的批次缓存
+        self._batches: Dict[str, Batch] = {}
+        
+        # 加载已存在的批次
+        self._load_batches()
+        
+        logger.info(f"TaskManager initialized with {len(self._batches)} batches")
+    
+    def _get_batch_file(self, batch_id: str) -> Path:
+        """获取批次文件路径"""
+        return self.storage_dir / f"{batch_id}.json"
+    
+    def _load_batches(self):
+        """从磁盘加载所有批次"""
+        for batch_file in self.storage_dir.glob("*.json"):
+            try:
+                with open(batch_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    batch = Batch.from_dict(data)
+                    self._batches[batch.id] = batch
+            except Exception as e:
+                logger.error(f"Failed to load batch {batch_file}: {e}")
+    
+    def _save_batch(self, batch: Batch):
+        """保存批次到磁盘"""
+        batch_file = self._get_batch_file(batch.id)
+        with open(batch_file, "w", encoding="utf-8") as f:
+            json.dump(batch.to_dict(), f, ensure_ascii=False, indent=2)
+    
+    def create_batch(
+        self,
+        user_id: str,
+        user_name: str,
+        name: str,
+        prompt: str,
+        audio_filename: str,
+        image_filenames: List[str],
+    ) -> Batch:
+        """
+        创建新批次
+        
+        Args:
+            user_id: 用户ID
+            user_name: 用户名
+            name: 批次名称
+            prompt: 提示词
+            audio_filename: 音频文件名
+            image_filenames: 图片文件名列表
+            
+        Returns:
+            创建的批次对象
+        """
+        batch_id = str(uuid.uuid4())
+        
+        # 创建子任务
+        items = [
+            VideoItem(
+                item_id=str(uuid.uuid4()),
+                batch_id=batch_id,
+                source_image_filename=img_filename,
+            )
+            for img_filename in image_filenames
+        ]
+        
+        batch = Batch(
+            batch_id=batch_id,
+            user_id=user_id,
+            user_name=user_name,
+            name=name,
+            prompt=prompt,
+            audio_filename=audio_filename,
+            image_count=len(image_filenames),
+            items=items,
+            status=BatchStatus.CREATED,
+        )
+        
+        self._batches[batch.id] = batch
+        self._save_batch(batch)
+        
+        logger.info(f"Created batch {batch_id} with {len(items)} items")
+        return batch
+    
+    def get_batch(self, batch_id: str) -> Optional[Batch]:
+        """获取批次"""
+        return self._batches.get(batch_id)
+    
+    def get_user_batches(self, user_id: str, limit: int = 50, offset: int = 0) -> List[Batch]:
+        """获取用户的所有批次"""
+        user_batches = [
+            batch for batch in self._batches.values()
+            if batch.user_id == user_id
+        ]
+        # 按创建时间倒序
+        user_batches.sort(key=lambda b: b.created_at, reverse=True)
+        return user_batches[offset:offset + limit]
+    
+    def get_all_batches(self, limit: int = 100, offset: int = 0) -> List[Batch]:
+        """获取所有批次"""
+        all_batches = list(self._batches.values())
+        all_batches.sort(key=lambda b: b.created_at, reverse=True)
+        return all_batches[offset:offset + limit]
+    
+    def update_video_item(
+        self,
+        batch_id: str,
+        item_id: str,
+        status: Optional[VideoItemStatus] = None,
+        video_filename: Optional[str] = None,
+        video_url: Optional[str] = None,
+        error_msg: Optional[str] = None,
+        api_task_id: Optional[str] = None,
+        estimated_duration: Optional[int] = None,
+    ) -> bool:
+        """
+        更新视频子项
+        
+        Returns:
+            是否成功
+        """
+        batch = self._batches.get(batch_id)
+        if not batch:
+            return False
+        
+        item = next((item for item in batch.items if item.id == item_id), None)
+        if not item:
+            return False
+        
+        # 状态变更时更新时间戳
+        if status is not None:
+            old_status = item.status
+            item.status = status
+            
+            # 状态变为 PROCESSING 时记录开始时间
+            if status == VideoItemStatus.PROCESSING and old_status != VideoItemStatus.PROCESSING:
+                item.started_at = datetime.now()
+            # 状态变为 COMPLETED 或 FAILED 时记录完成时间
+            elif status in [VideoItemStatus.COMPLETED, VideoItemStatus.FAILED]:
+                item.completed_at = datetime.now()
+        
+        if video_filename is not None:
+            item.video_filename = video_filename
+        if video_url is not None:
+            item.video_url = video_url
+        if error_msg is not None:
+            item.error_msg = error_msg
+        if api_task_id is not None:
+            item.api_task_id = api_task_id
+        if estimated_duration is not None:
+            item.estimated_duration = estimated_duration
+        
+        item.updated_at = datetime.now()
+        batch.update_status()
+        self._save_batch(batch)
+        
+        return True
+    
+    def get_video_item(self, batch_id: str, item_id: str) -> Optional[VideoItem]:
+        """获取视频子项"""
+        batch = self._batches.get(batch_id)
+        if not batch:
+            return None
+        return next((item for item in batch.items if item.id == item_id), None)
+

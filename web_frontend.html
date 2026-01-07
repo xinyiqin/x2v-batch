@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>S2V 批量任务管理</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .form-section {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+        }
+        
+        .form-section h2 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #555;
+        }
+        
+        input[type="text"],
+        input[type="number"],
+        textarea,
+        select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        input:focus,
+        textarea:focus,
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+        
+        .file-upload {
+            position: relative;
+            display: inline-block;
+            width: 100%;
+        }
+        
+        .file-upload input[type="file"] {
+            position: absolute;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+        
+        .file-upload-label {
+            display: block;
+            padding: 40px;
+            border: 2px dashed #667eea;
+            border-radius: 6px;
+            text-align: center;
+            background: #f0f4ff;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .file-upload-label:hover {
+            background: #e0e8ff;
+            border-color: #764ba2;
+        }
+        
+        .file-name {
+            margin-top: 10px;
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .checkbox-group input[type="checkbox"] {
+            width: auto;
+        }
+        
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 14px 28px;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .tasks-section {
+            margin-top: 30px;
+        }
+        
+        .task-card {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 15px;
+            transition: box-shadow 0.3s;
+        }
+        
+        .task-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        
+        .task-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .task-id {
+            font-family: monospace;
+            color: #666;
+            font-size: 12px;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .status-CREATED { background: #e3f2fd; color: #1976d2; }
+        .status-SUBMITTING { background: #fff3e0; color: #f57c00; }
+        .status-PENDING { background: #fff3e0; color: #f57c00; }
+        .status-PROCESSING { background: #fff3e0; color: #f57c00; }
+        .status-SUCCEED { background: #e8f5e9; color: #388e3c; }
+        .status-FAILED { background: #ffebee; color: #d32f2f; }
+        .status-CANCELLED { background: #f3e5f5; color: #7b1fa2; }
+        
+        .task-info {
+            margin-top: 10px;
+        }
+        
+        .task-info p {
+            margin: 5px 0;
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .result-url {
+            margin-top: 10px;
+        }
+        
+        .result-url a {
+            color: #667eea;
+            text-decoration: none;
+            word-break: break-all;
+        }
+        
+        .result-url a:hover {
+            text-decoration: underline;
+        }
+        
+        .error-message {
+            color: #d32f2f;
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        
+        .btn-small {
+            padding: 8px 16px;
+            font-size: 14px;
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%);
+        }
+        
+        .refresh-btn {
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎬 S2V 批量任务管理</h1>
+            <p>提交和管理语音转视频任务</p>
+        </div>
+        
+        <div class="content">
+            <!-- 提交任务表单 -->
+            <div class="form-section">
+                <h2>提交新任务</h2>
+                <form id="taskForm">
+                    <div class="form-group">
+                        <label for="prompt">提示词 (Prompt) *</label>
+                        <textarea id="prompt" name="prompt" required placeholder="例如：根据音频生成对应视频"></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="negative_prompt">负面提示词 (Negative Prompt)</label>
+                        <textarea id="negative_prompt" name="negative_prompt" placeholder="例如：色调艳丽，过曝，静态..."></textarea>
+                    </div>
+                    
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
+                        <div class="form-group">
+                            <label for="cfg_scale">CFG Scale</label>
+                            <input type="number" id="cfg_scale" name="cfg_scale" value="5" min="1" max="20">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="duration">时长 (秒)</label>
+                            <input type="number" id="duration" name="duration" value="7" min="1" max="60">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="seed">随机种子 (可选)</label>
+                            <input type="number" id="seed" name="seed" placeholder="留空则随机">
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="image">上传图片 *</label>
+                        <div class="file-upload">
+                            <input type="file" id="image" name="image" accept="image/*" required>
+                            <label for="image" class="file-upload-label">
+                                📷 点击选择图片文件
+                            </label>
+                            <div class="file-name" id="imageName"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="audio">上传音频 *</label>
+                        <div class="file-upload">
+                            <input type="file" id="audio" name="audio" accept="audio/*" required>
+                            <label for="audio" class="file-upload-label">
+                                🎵 点击选择音频文件
+                            </label>
+                            <div class="file-name" id="audioName"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group checkbox-group">
+                        <input type="checkbox" id="wait_for_completion" name="wait_for_completion">
+                        <label for="wait_for_completion">等待任务完成（可能需要较长时间）</label>
+                    </div>
+                    
+                    <button type="submit" id="submitBtn">🚀 提交任务</button>
+                </form>
+            </div>
+            
+            <!-- 任务列表 -->
+            <div class="tasks-section">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h2>任务列表</h2>
+                    <button class="refresh-btn btn-small" onclick="loadTasks()">🔄 刷新</button>
+                </div>
+                <div id="tasksList"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = 'http://localhost:8000/api';
+        
+        // 文件选择显示
+        document.getElementById('image').addEventListener('change', function(e) {
+            document.getElementById('imageName').textContent = e.target.files[0]?.name || '';
+        });
+        
+        document.getElementById('audio').addEventListener('change', function(e) {
+            document.getElementById('audioName').textContent = e.target.files[0]?.name || '';
+        });
+        
+        // 提交表单
+        document.getElementById('taskForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const submitBtn = document.getElementById('submitBtn');
+            submitBtn.disabled = true;
+            submitBtn.textContent = '提交中...';
+            
+            const formData = new FormData();
+            formData.append('prompt', document.getElementById('prompt').value);
+            formData.append('negative_prompt', document.getElementById('negative_prompt').value);
+            formData.append('cfg_scale', document.getElementById('cfg_scale').value);
+            formData.append('duration', document.getElementById('duration').value);
+            const seed = document.getElementById('seed').value;
+            if (seed) formData.append('seed', seed);
+            formData.append('model_cls', 'SekoTalk');
+            formData.append('stage', 'single_stage');
+            formData.append('image', document.getElementById('image').files[0]);
+            formData.append('audio', document.getElementById('audio').files[0]);
+            formData.append('wait_for_completion', document.getElementById('wait_for_completion').checked);
+            
+            try {
+                const response = await fetch(`${API_BASE}/submit`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    alert(`任务提交成功！任务ID: ${result.task_id}`);
+                    document.getElementById('taskForm').reset();
+                    document.getElementById('imageName').textContent = '';
+                    document.getElementById('audioName').textContent = '';
+                    loadTasks();
+                } else {
+                    alert(`提交失败: ${result.detail || '未知错误'}`);
+                }
+            } catch (error) {
+                alert(`提交失败: ${error.message}`);
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = '🚀 提交任务';
+            }
+        });
+        
+        // 加载任务列表
+        async function loadTasks() {
+            try {
+                const response = await fetch(`${API_BASE}/tasks?limit=50`);
+                const data = await response.json();
+                
+                const tasksList = document.getElementById('tasksList');
+                if (data.tasks.length === 0) {
+                    tasksList.innerHTML = '<p style="text-align: center; color: #999; padding: 40px;">暂无任务</p>';
+                    return;
+                }
+                
+                tasksList.innerHTML = data.tasks.map(task => {
+                    const statusClass = `status-${task.status}`;
+                    const date = new Date(task.created_at).toLocaleString('zh-CN');
+                    
+                    let resultHtml = '';
+                    if (task.result_url) {
+                        resultHtml = `
+                            <div class="result-url">
+                                <strong>结果视频:</strong>
+                                <a href="${task.result_url}" target="_blank">${task.result_url}</a>
+                            </div>
+                        `;
+                    }
+                    
+                    let errorHtml = '';
+                    if (task.error) {
+                        errorHtml = `<div class="error-message">❌ 错误: ${task.error}</div>`;
+                    }
+                    
+                    const canCancel = task.status === 'PENDING' || task.status === 'PROCESSING';
+                    
+                    return `
+                        <div class="task-card">
+                            <div class="task-header">
+                                <div>
+                                    <div class="task-id">ID: ${task.task_id}</div>
+                                    <div style="margin-top: 5px;">
+                                        <span class="status-badge ${statusClass}">${task.status}</span>
+                                    </div>
+                                </div>
+                                <div style="text-align: right; color: #999; font-size: 12px;">
+                                    ${date}
+                                </div>
+                            </div>
+                            <div class="task-info">
+                                <p><strong>提示词:</strong> ${task.prompt}</p>
+                                ${task.api_task_id ? `<p><strong>API任务ID:</strong> ${task.api_task_id}</p>` : ''}
+                                ${resultHtml}
+                                ${errorHtml}
+                            </div>
+                            ${canCancel ? `
+                                <div class="actions">
+                                    <button class="btn-small btn-danger" onclick="cancelTask('${task.task_id}')">取消任务</button>
+                                    <button class="btn-small" onclick="refreshTask('${task.task_id}')">刷新状态</button>
+                                </div>
+                            ` : ''}
+                        </div>
+                    `;
+                }).join('');
+                
+                // 自动刷新进行中的任务
+                const processingTasks = data.tasks.filter(t => 
+                    t.status === 'PENDING' || t.status === 'PROCESSING' || t.status === 'SUBMITTING'
+                );
+                if (processingTasks.length > 0) {
+                    setTimeout(loadTasks, 5000); // 5秒后自动刷新
+                }
+            } catch (error) {
+                document.getElementById('tasksList').innerHTML = 
+                    `<p style="color: #d32f2f; text-align: center; padding: 20px;">加载失败: ${error.message}</p>`;
+            }
+        }
+        
+        // 刷新单个任务
+        async function refreshTask(taskId) {
+            try {
+                const response = await fetch(`${API_BASE}/task/${taskId}`);
+                const task = await response.json();
+                loadTasks();
+            } catch (error) {
+                alert(`刷新失败: ${error.message}`);
+            }
+        }
+        
+        // 取消任务
+        async function cancelTask(taskId) {
+            if (!confirm('确定要取消这个任务吗？')) return;
+            
+            try {
+                const response = await fetch(`${API_BASE}/task/${taskId}`, {
+                    method: 'DELETE'
+                });
+                const result = await response.json();
+                if (result.success) {
+                    alert('任务已取消');
+                    loadTasks();
+                } else {
+                    alert('取消失败');
+                }
+            } catch (error) {
+                alert(`取消失败: ${error.message}`);
+            }
+        }
+        
+        // 页面加载时获取任务列表
+        loadTasks();
+    </script>
+</body>
+</html>
+
