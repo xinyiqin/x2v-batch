@@ -15,7 +15,7 @@ try:
     S3_AVAILABLE = True
 except ImportError:
     S3_AVAILABLE = False
-    logger.warning("aioboto3 not installed, S3 support unavailable")
+    # 不在这里显示警告，只在真正使用时显示
 
 
 class S3DataManager:

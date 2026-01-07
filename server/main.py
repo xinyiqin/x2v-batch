@@ -15,9 +15,11 @@ import uvicorn
 
 from server.auth import AuthManager
 from server.data_manager import LocalDataManager
-from server.s3_data_manager import S3DataManager
 from server.task_manager import TaskManager
 from server.batch_processor import BatchProcessor
+
+# 延迟导入 S3DataManager，只在需要时导入
+S3DataManager = None
 
 # 初始化数据目录（首次启动时）
 def init_data_directory():
@@ -86,8 +88,15 @@ if STORAGE_TYPE == "s3":
         logger.warning("STORAGE_TYPE=s3 but S3_CONFIG not set, falling back to local storage")
         data_manager = LocalDataManager(base_dir=data_dir)
     else:
-        data_manager = S3DataManager(s3_config)
-        logger.info("Using S3DataManager for storage (will initialize on startup)")
+        # 只在需要时导入 S3DataManager
+        try:
+            from server.s3_data_manager import S3DataManager
+            data_manager = S3DataManager(s3_config)
+            logger.info("Using S3DataManager for storage (will initialize on startup)")
+        except ImportError as e:
+            logger.error(f"Failed to import S3DataManager: {e}. Please install aioboto3: pip install aioboto3")
+            logger.warning("Falling back to local storage")
+            data_manager = LocalDataManager(base_dir=data_dir)
 else:
     data_manager = LocalDataManager(base_dir=data_dir)
     logger.info(f"Using LocalDataManager for storage (base_dir: {data_dir})")
@@ -114,16 +123,26 @@ app = FastAPI(title="AI Vision Batch Service")
 @app.on_event("startup")
 async def startup_event():
     """应用启动时初始化 S3 连接"""
-    if isinstance(data_manager, S3DataManager):
-        await data_manager.init()
-        logger.info("S3DataManager initialized successfully")
+    # 检查是否是 S3DataManager（需要动态检查，因为可能延迟导入）
+    if hasattr(data_manager, 'init') and callable(getattr(data_manager, 'init', None)):
+        try:
+            await data_manager.init()
+            logger.info("S3DataManager initialized successfully")
+        except AttributeError:
+            # 不是 S3DataManager，跳过
+            pass
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """应用关闭时清理资源"""
-    if isinstance(data_manager, S3DataManager):
-        await data_manager.close()
-        logger.info("S3DataManager closed")
+    # 检查是否是 S3DataManager（需要动态检查）
+    if hasattr(data_manager, 'close') and callable(getattr(data_manager, 'close', None)):
+        try:
+            await data_manager.close()
+            logger.info("S3DataManager closed")
+        except AttributeError:
+            # 不是 S3DataManager，跳过
+            pass
 
 # CORS 配置
 app.add_middleware(
