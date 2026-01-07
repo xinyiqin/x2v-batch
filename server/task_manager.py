@@ -339,32 +339,19 @@ class TaskManager:
             # 使用 DataManager（可能是 S3）
             try:
                 # 列出所有批次文件
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        with concurrent.futures.ThreadPoolExecutor() as executor:
-                            future = executor.submit(asyncio.run, self._load_batches_async())
-                            files = future.result()
-                    else:
-                        files = loop.run_until_complete(self._load_batches_async())
-                except RuntimeError:
-                    files = asyncio.run(self._load_batches_async())
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, self._load_batches_async())
+                    files = future.result()
                 
                 # 加载每个批次
                 for filename in files:
                     if filename.endswith('.json'):
                         batch_id = filename[:-5]  # 移除 .json 后缀
                         try:
-                            try:
-                                loop = asyncio.get_event_loop()
-                                if loop.is_running():
-                                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                                        future = executor.submit(asyncio.run, self._load_batch_async(batch_id))
-                                        data_bytes = future.result()
-                                else:
-                                    data_bytes = loop.run_until_complete(self._load_batch_async(batch_id))
-                            except RuntimeError:
-                                data_bytes = asyncio.run(self._load_batch_async(batch_id))
+                            with concurrent.futures.ThreadPoolExecutor() as executor:
+                                future = executor.submit(asyncio.run, self._load_batch_async(batch_id))
+                                data_bytes = future.result()
                             
                             if data_bytes:
                                 data = json.loads(data_bytes.decode('utf-8'))
@@ -409,16 +396,10 @@ class TaskManager:
             try:
                 data = json.dumps(batch.to_dict(), ensure_ascii=False, indent=2).encode('utf-8')
                 filename = f"{batch.id}.json"
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        with concurrent.futures.ThreadPoolExecutor() as executor:
-                            future = executor.submit(asyncio.run, self._save_batch_async(filename, data))
-                            future.result()
-                    else:
-                        loop.run_until_complete(self._save_batch_async(filename, data))
-                except RuntimeError:
-                    asyncio.run(self._save_batch_async(filename, data))
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, self._save_batch_async(filename, data))
+                    future.result()
             except Exception as e:
                 logger.error(f"Failed to save batch to data_manager: {e}")
         else:

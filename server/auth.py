@@ -45,21 +45,11 @@ class AuthManager:
         if self.data_manager:
             # 使用 DataManager（可能是 S3）
             try:
-                # 检查是否有事件循环在运行
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        # 如果循环正在运行，创建任务（但这在同步方法中可能有问题）
-                        # 使用 run_coroutine_threadsafe 或直接同步调用
-                        import concurrent.futures
-                        with concurrent.futures.ThreadPoolExecutor() as executor:
-                            future = executor.submit(self._load_users_async)
-                            data = future.result()
-                    else:
-                        data = loop.run_until_complete(self._load_users_async())
-                except RuntimeError:
-                    # 没有事件循环，创建一个新的
-                    data = asyncio.run(self._load_users_async())
+                # 在同步方法中运行异步函数
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, self._load_users_async())
+                    data = future.result()
                 
                 if data:
                     self._users = json.loads(data.decode('utf-8'))
@@ -95,18 +85,11 @@ class AuthManager:
             # 使用 DataManager（可能是 S3）
             try:
                 data = json.dumps(self._users, ensure_ascii=False, indent=2).encode('utf-8')
-                # 检查是否有事件循环在运行
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        import concurrent.futures
-                        with concurrent.futures.ThreadPoolExecutor() as executor:
-                            future = executor.submit(asyncio.run, self._save_users_async(data))
-                            future.result()
-                    else:
-                        loop.run_until_complete(self._save_users_async(data))
-                except RuntimeError:
-                    asyncio.run(self._save_users_async(data))
+                # 在同步方法中运行异步函数
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, self._save_users_async(data))
+                    future.result()
             except Exception as e:
                 logger.error(f"Failed to save users to data_manager: {e}")
         else:

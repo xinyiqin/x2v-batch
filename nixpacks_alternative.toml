@@ -1,0 +1,18 @@
+# 备选方案：如果 python311Packages.pip 不工作，可以尝试这个
+# 使用 get-pip.py 来安装 pip
+
+[phases.setup]
+nixPkgs = ["python311", "curl"]
+
+[phases.install]
+cmds = [
+  "curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py",
+  "python get-pip.py",
+  "python -m pip install --upgrade pip",
+  "python -m pip install -r requirements.txt",
+  "rm get-pip.py"
+]
+
+[start]
+cmd = "cd server && python -m uvicorn server.main:app --host 0.0.0.0 --port $PORT"
+

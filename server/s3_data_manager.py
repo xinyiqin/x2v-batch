@@ -125,13 +125,26 @@ class S3DataManager:
         """获取 S3 对象键（路径）"""
         parts = []
         if self.base_path:
-            parts.append(self.base_path.rstrip('/'))
+            # 移除 base_path 前后的斜杠
+            base = self.base_path.strip('/')
+            if base:
+                parts.append(base)
         if subdir:
-            parts.append(subdir)
-        parts.append(filename)
+            # 移除 subdir 前后的斜杠
+            sub = subdir.strip('/')
+            if sub:
+                parts.append(sub)
+        # 移除 filename 前后的斜杠
+        name = filename.strip('/')
+        if name:
+            parts.append(name)
+        # 使用 / 连接，确保没有双斜杠
         key = '/'.join(parts)
-        # 确保 key 不以 / 开头
-        return key.lstrip('/')
+        # 确保 key 不以 / 开头，并且规范化路径
+        key = key.lstrip('/')
+        # 移除空字符串部分
+        key = '/'.join([p for p in key.split('/') if p])
+        return key
     
     async def save_bytes(self, bytes_data: bytes, filename: str, subdir: Optional[str] = None) -> str:
         """
@@ -149,9 +162,14 @@ class S3DataManager:
             await self.init()
         
         key = self._get_key(filename, subdir)
+        # 确保 key 不为空
+        if not key:
+            raise ValueError(f"Invalid key generated for filename: {filename}, subdir: {subdir}")
+        
         content_sha256 = hashlib.sha256(bytes_data).hexdigest()
         
         try:
+            logger.debug(f"Attempting to save bytes to S3: bucket={self.bucket_name}, key={key}, size={len(bytes_data)}")
             await self.s3_client.put_object(
                 Bucket=self.bucket_name,
                 Key=key,
@@ -161,7 +179,9 @@ class S3DataManager:
             logger.debug(f"Saved bytes to S3: {key}")
             return key
         except Exception as e:
-            logger.error(f"Failed to save bytes to S3: {e}")
+            logger.error(f"Failed to save bytes to S3: bucket={self.bucket_name}, key={key}, error={e}")
+            import traceback
+            logger.debug(f"Traceback: {traceback.format_exc()}")
             raise
     
     async def load_bytes(self, filename: str, subdir: Optional[str] = None) -> bytes:
@@ -302,6 +322,8 @@ class S3DataManager:
         prefix = self._get_key("", subdir)
         if prefix and not prefix.endswith('/'):
             prefix += '/'
+        elif not prefix:
+            prefix = ""
         
         files = []
         continuation_token = None
@@ -310,9 +332,10 @@ class S3DataManager:
             while True:
                 list_kwargs = {
                     "Bucket": self.bucket_name,
-                    "Prefix": prefix,
                     "MaxKeys": 1000
                 }
+                if prefix:
+                    list_kwargs["Prefix"] = prefix
                 if continuation_token:
                     list_kwargs["ContinuationToken"] = continuation_token
                 
@@ -322,10 +345,17 @@ class S3DataManager:
                     for obj in response["Contents"]:
                         key = obj["Key"]
                         # 移除前缀，只保留文件名
-                        if key.startswith(prefix):
+                        if prefix and key.startswith(prefix):
                             filename = key[len(prefix):]
                             if filename:  # 跳过空文件名（目录本身）
                                 files.append(filename)
+                        elif not prefix:
+                            # 如果没有前缀，直接使用文件名
+                            if key and not key.endswith('/'):
+                                # 提取文件名（最后一个部分）
+                                filename = key.split('/')[-1]
+                                if filename:
+                                    files.append(filename)
                 
                 # 检查是否有更多页面
                 if response.get("IsTruncated", False):
@@ -336,5 +366,7 @@ class S3DataManager:
             return files
         except Exception as e:
             logger.error(f"Failed to list files from S3: {e}")
+            import traceback
+            logger.debug(f"Traceback: {traceback.format_exc()}")
             return []
 
