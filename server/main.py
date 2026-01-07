@@ -15,6 +15,7 @@ import uvicorn
 
 from server.auth import AuthManager
 from server.data_manager import LocalDataManager
+from server.s3_data_manager import S3DataManager
 from server.task_manager import TaskManager
 from server.batch_processor import BatchProcessor
 
@@ -95,6 +96,20 @@ batch_processor = BatchProcessor(
 
 # FastAPI 应用
 app = FastAPI(title="AI Vision Batch Service")
+
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时初始化 S3 连接"""
+    if isinstance(data_manager, S3DataManager):
+        await data_manager.init()
+        logger.info("S3DataManager initialized successfully")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭时清理资源"""
+    if isinstance(data_manager, S3DataManager):
+        await data_manager.close()
+        logger.info("S3DataManager closed")
 
 # CORS 配置
 app.add_middleware(
