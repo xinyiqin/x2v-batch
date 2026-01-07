@@ -40,10 +40,10 @@ class AuthManager:
             # 如果本地已有用户数据（包括 admin），则不会创建
             if not self._users:
                 logger.info("No users found in local storage, creating default admin user")
-                self.create_user("admin", "admin", is_admin=True, credits=9999)
+                self.create_user("admin", "admin8888", is_admin=True, credits=9999)
             elif "admin" not in self._users:
                 logger.info("Users exist but no admin found, creating admin user")
-                self.create_user("admin", "admin", is_admin=True, credits=9999)
+                self.create_user("admin", "admin8888", is_admin=True, credits=9999)
             else:
                 logger.info(f"Using existing users from local storage (including admin)")
             logger.info(f"AuthManager initialized with {len(self._users)} users (storage: local)")
@@ -78,14 +78,14 @@ class AuthManager:
         # 如果 S3 上已有用户数据（包括 admin），则不会创建
         if not self._users:
             logger.info("No users found, creating default admin user")
-            self.create_user("admin", "admin", is_admin=True, credits=9999)
+            self.create_user("admin", "admin8888", is_admin=True, credits=9999)
             # 保存到 S3
             if self.data_manager:
                 await self._save_users_async(json.dumps(self._users, ensure_ascii=False, indent=2).encode('utf-8'))
         elif "admin" not in self._users:
             # 如果有其他用户但没有 admin，创建 admin
             logger.info("Users exist but no admin found, creating admin user")
-            self.create_user("admin", "admin", is_admin=True, credits=9999)
+            self.create_user("admin", "admin8888", is_admin=True, credits=9999)
             # 保存到 S3
             if self.data_manager:
                 await self._save_users_async(json.dumps(self._users, ensure_ascii=False, indent=2).encode('utf-8'))
