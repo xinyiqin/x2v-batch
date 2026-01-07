@@ -252,6 +252,44 @@ export async function getAllUsers(): Promise<GetAllUsersResponse> {
   return request<GetAllUsersResponse>('/api/admin/users');
 }
 
+export interface CreateUserResponse {
+  success: boolean;
+  user: User;
+}
+
+export async function createUser(username: string, credits: number = 100, is_admin: boolean = false): Promise<CreateUserResponse> {
+  const formData = new FormData();
+  formData.append('username', username);
+  formData.append('credits', credits.toString());
+  formData.append('is_admin', is_admin.toString());
+  
+  const token = getToken();
+  const headers: HeadersInit = {};
+
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`${API_BASE}/api/admin/users`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  });
+
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+    throw new Error('Unauthorized');
+  }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Failed to create user' }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
 export async function updateUserCredits(userId: string, newCredits: number): Promise<void> {
   const formData = new FormData();
   formData.append('new_credits', newCredits.toString());

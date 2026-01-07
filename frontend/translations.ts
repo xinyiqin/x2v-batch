@@ -60,7 +60,14 @@ export const translations = {
     setCreditsTitle: "Set Credits for {name}",
     newCreditsLabel: "New Credit Amount",
     totalSpent: "Total Spent",
-    user: "User"
+    user: "User",
+    createUser: "Create User",
+    createUserTitle: "Create New User",
+    usernameRequired: "Username is required",
+    initialCredits: "Initial Credits",
+    defaultPasswordInfo: "Default password: 123456",
+    create: "Create",
+    creating: "Creating..."
   },
   zh: {
     brand: "智影 AI",
@@ -122,7 +129,14 @@ export const translations = {
     setCreditsTitle: "设置 {name} 的点数",
     newCreditsLabel: "新点数额度",
     totalSpent: "累计消耗",
-    user: "用户"
+    user: "用户",
+    createUser: "新增用户",
+    createUserTitle: "创建新用户",
+    usernameRequired: "用户名不能为空",
+    initialCredits: "初始点数",
+    defaultPasswordInfo: "初始密码: 123456",
+    create: "创建",
+    creating: "创建中..."
   }
 };
 

@@ -2,18 +2,24 @@
 import React, { useState } from 'react';
 import { User, Batch } from '../types';
 import { translations, Language } from '../translations';
+import { createUser } from '../api';
 
 interface AdminPanelProps {
   users: User[];
   batches: Batch[];
   onUpdateUserCredits: (userId: string, newCredits: number) => void;
+  onCreateUser?: () => void; // 用户创建成功后的回调
   lang: Language;
 }
 
-export const AdminPanel: React.FC<AdminPanelProps> = ({ users, batches, onUpdateUserCredits, lang }) => {
+export const AdminPanel: React.FC<AdminPanelProps> = ({ users, batches, onUpdateUserCredits, onCreateUser, lang }) => {
   const t = translations[lang];
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<number>(0);
+  const [showCreateUserModal, setShowCreateUserModal] = useState(false);
+  const [newUsername, setNewUsername] = useState('');
+  const [newCredits, setNewCredits] = useState(100);
+  const [isCreating, setIsCreating] = useState(false);
 
 
   const startEditing = (user: User) => {
@@ -28,15 +34,53 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ users, batches, onUpdate
     }
   };
 
+  const handleCreateUser = async () => {
+    if (!newUsername.trim()) {
+      alert(t.usernameRequired || 'Username is required');
+      return;
+    }
+
+    setIsCreating(true);
+    try {
+      await createUser(newUsername.trim(), newCredits, false);
+      setShowCreateUserModal(false);
+      setNewUsername('');
+      setNewCredits(100);
+      if (onCreateUser) {
+        onCreateUser();
+      }
+    } catch (error: any) {
+      const errorMsg = error?.detail || error?.message || 'Failed to create user';
+      alert(errorMsg);
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
   return (
     <div className="space-y-12">
       {/* User Management Section */}
       <section>
-        <div className="flex items-center gap-4 mb-8">
-          <div className="p-3 rounded-2xl" style={{ background: 'rgba(144, 220, 225, 0.12)' }}>
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: '#90dce1' }}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center gap-4">
+            <div className="p-3 rounded-2xl" style={{ background: 'rgba(144, 220, 225, 0.12)' }}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: '#90dce1' }}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            </div>
+            <h2 className="text-3xl font-semibold text-white tracking-tight">{t.userManagement}</h2>
           </div>
-          <h2 className="text-3xl font-semibold text-white tracking-tight">{t.userManagement}</h2>
+          <button
+            onClick={() => setShowCreateUserModal(true)}
+            className="px-6 py-3 text-white font-semibold rounded-2xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center gap-2"
+            style={{ 
+              background: 'linear-gradient(135deg, #90dce1 0%, #6fc4cc 100%)',
+              boxShadow: '0 8px 20px rgba(144, 220, 225, 0.3)'
+            }}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+            {t.createUser || 'Create User'}
+          </button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -158,6 +202,95 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ users, batches, onUpdate
                   }}
                 >
                   {t.save}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create User Modal */}
+      {showCreateUserModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl animate-in fade-in duration-200">
+          <div className="w-full max-w-sm bg-white/[0.05] backdrop-blur-2xl border border-white/[0.1] rounded-3xl p-10 shadow-2xl">
+            <h3 className="text-2xl font-semibold text-white mb-8 tracking-tight">
+              {t.createUserTitle || 'Create New User'}
+            </h3>
+            
+            <div className="space-y-6">
+              <div className="space-y-3">
+                <label className="text-xs text-gray-400 uppercase font-medium tracking-wider">
+                  {t.username || 'Username'}
+                </label>
+                <input 
+                  type="text"
+                  value={newUsername}
+                  onChange={(e) => setNewUsername(e.target.value)}
+                  placeholder={t.usernamePlaceholder || 'Enter username'}
+                  className="w-full bg-white/[0.08] border border-white/[0.12] rounded-2xl px-5 py-4 text-white placeholder-gray-500 focus:outline-none transition-all duration-200"
+                  style={{ 
+                    '--tw-ring-color': 'rgba(144, 220, 225, 0.5)'
+                  } as React.CSSProperties}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = 'rgba(144, 220, 225, 0.4)';
+                    e.target.style.boxShadow = '0 0 0 3px rgba(144, 220, 225, 0.1)';
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = '';
+                    e.target.style.boxShadow = '';
+                  }}
+                />
+              </div>
+
+              <div className="space-y-3">
+                <label className="text-xs text-gray-400 uppercase font-medium tracking-wider">
+                  {t.initialCredits || 'Initial Credits'}
+                </label>
+                <input 
+                  type="number"
+                  value={newCredits}
+                  onChange={(e) => setNewCredits(parseInt(e.target.value) || 0)}
+                  min="0"
+                  className="w-full bg-white/[0.08] border border-white/[0.12] rounded-2xl px-5 py-4 text-2xl font-bold text-white focus:outline-none transition-all duration-200"
+                  style={{ 
+                    '--tw-ring-color': 'rgba(144, 220, 225, 0.5)'
+                  } as React.CSSProperties}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = 'rgba(144, 220, 225, 0.4)';
+                    e.target.style.boxShadow = '0 0 0 3px rgba(144, 220, 225, 0.1)';
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = '';
+                    e.target.style.boxShadow = '';
+                  }}
+                />
+                <p className="text-xs text-gray-500 mt-2">
+                  {t.defaultPasswordInfo || 'Default password: 123456'}
+                </p>
+              </div>
+
+              <div className="flex gap-4 pt-2">
+                <button 
+                  onClick={() => {
+                    setShowCreateUserModal(false);
+                    setNewUsername('');
+                    setNewCredits(100);
+                  }}
+                  className="flex-1 py-3.5 bg-white/[0.08] hover:bg-white/[0.12] text-white font-semibold rounded-2xl transition-all duration-200 border border-white/[0.1] hover:border-white/[0.2]"
+                  disabled={isCreating}
+                >
+                  {t.cancel}
+                </button>
+                <button 
+                  onClick={handleCreateUser}
+                  disabled={isCreating || !newUsername.trim()}
+                  className="flex-1 py-3.5 text-white font-semibold rounded-2xl transition-all duration-200 shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ 
+                    background: 'linear-gradient(135deg, #90dce1 0%, #6fc4cc 100%)',
+                    boxShadow: '0 8px 20px rgba(144, 220, 225, 0.3)'
+                  }}
+                >
+                  {isCreating ? (t.creating || 'Creating...') : (t.create || 'Create')}
                 </button>
               </div>
             </div>

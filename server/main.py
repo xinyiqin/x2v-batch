@@ -3,6 +3,7 @@
 """
 import os
 import asyncio
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -49,8 +50,8 @@ def init_data_directory():
             def hash_password(password: str) -> str:
                 return hashlib.sha256(password.encode()).hexdigest()
             
-            # 从环境变量获取管理员初始密码，默认使用 admin8888
-            admin_password = os.getenv("ADMIN_PASSWORD", "admin8888")
+            # 从环境变量获取管理员初始密码
+            admin_password = os.getenv("ADMIN_PASSWORD")
             
             default_users = {
                 "admin": {
@@ -59,14 +60,6 @@ def init_data_directory():
                     "password_hash": hash_password(admin_password),
                     "credits": 9999,
                     "is_admin": True,
-                    "created_at": "2026-01-01T00:00:00"
-                },
-                "user1": {
-                    "id": "u-1",
-                    "username": "user1",
-                    "password_hash": hash_password("lightx2v9999"),
-                    "credits": 10,
-                    "is_admin": False,
                     "created_at": "2026-01-01T00:00:00"
                 }
             }
@@ -399,6 +392,51 @@ async def get_all_users(admin: dict = Depends(get_current_admin)):
     """获取所有用户列表"""
     users = auth_manager.get_all_users()
     return {"users": users}
+
+
+@app.post("/api/admin/users")
+async def create_user(
+    username: str = Form(...),
+    credits: int = Form(100),
+    is_admin: bool = Form(False),
+    admin: dict = Depends(get_current_admin),
+):
+    """创建新用户（管理员功能）"""
+    if credits < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Credits must be non-negative"
+        )
+    
+    try:
+        # 新用户的初始密码固定为 123456
+        default_password = "123456"
+        user_data = auth_manager.create_user(
+            username=username,
+            password=default_password,
+            is_admin=is_admin,
+            credits=credits
+        )
+        
+        # 如果是 S3 存储，需要异步保存
+        if STORAGE_TYPE == "s3" and auth_manager.data_manager:
+            users_data = json.dumps(auth_manager._users, ensure_ascii=False, indent=2).encode('utf-8')
+            await auth_manager._save_users_async(users_data)
+        
+        return {
+            "success": True,
+            "user": {
+                "id": user_data["id"],
+                "username": user_data["username"],
+                "credits": user_data["credits"],
+                "isAdmin": user_data["is_admin"],
+            }
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
 
 
 @app.patch("/api/admin/users/{user_id}/credits")
