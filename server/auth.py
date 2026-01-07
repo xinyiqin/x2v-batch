@@ -4,6 +4,7 @@
 import hashlib
 import secrets
 import jwt
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from pathlib import Path
@@ -14,17 +15,20 @@ from loguru import logger
 class AuthManager:
     """认证管理器"""
     
-    def __init__(self, secret_key: Optional[str] = None, storage_file: str = "./data/users.json"):
+    def __init__(self, secret_key: Optional[str] = None, storage_file: str = "./data/users.json", data_manager=None):
         """
         初始化认证管理器
         
         Args:
             secret_key: JWT 密钥
-            storage_file: 用户数据存储文件
+            storage_file: 用户数据存储文件（当不使用 data_manager 时）
+            data_manager: 数据管理器（可选，如果提供则使用它存储 JSON）
         """
         self.secret_key = secret_key or secrets.token_urlsafe(32)
         self.storage_file = Path(storage_file)
         self.storage_file.parent.mkdir(parents=True, exist_ok=True)
+        self.data_manager = data_manager
+        self.storage_filename = "users.json"
         
         # 加载用户数据
         self._users: Dict[str, Dict[str, Any]] = {}
@@ -34,25 +38,91 @@ class AuthManager:
         if "admin" not in self._users:
             self.create_user("admin", "admin", is_admin=True, credits=9999)
         
-        logger.info(f"AuthManager initialized with {len(self._users)} users")
+        logger.info(f"AuthManager initialized with {len(self._users)} users (storage: {'S3' if data_manager else 'local'})")
     
     def _load_users(self):
-        """从磁盘加载用户数据"""
-        if self.storage_file.exists():
+        """从存储加载用户数据（支持本地文件或 S3）"""
+        if self.data_manager:
+            # 使用 DataManager（可能是 S3）
             try:
-                with open(self.storage_file, "r", encoding="utf-8") as f:
-                    self._users = json.load(f)
+                # 检查是否有事件循环在运行
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # 如果循环正在运行，创建任务（但这在同步方法中可能有问题）
+                        # 使用 run_coroutine_threadsafe 或直接同步调用
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(self._load_users_async)
+                            data = future.result()
+                    else:
+                        data = loop.run_until_complete(self._load_users_async())
+                except RuntimeError:
+                    # 没有事件循环，创建一个新的
+                    data = asyncio.run(self._load_users_async())
+                
+                if data:
+                    self._users = json.loads(data.decode('utf-8'))
+                else:
+                    self._users = {}
             except Exception as e:
-                logger.error(f"Failed to load users: {e}")
+                logger.error(f"Failed to load users from data_manager: {e}")
                 self._users = {}
+        else:
+            # 使用本地文件
+            if self.storage_file.exists():
+                try:
+                    with open(self.storage_file, "r", encoding="utf-8") as f:
+                        self._users = json.load(f)
+                except Exception as e:
+                    logger.error(f"Failed to load users: {e}")
+                    self._users = {}
+    
+    async def _load_users_async(self) -> bytes:
+        """异步加载用户数据"""
+        try:
+            if await self.data_manager.file_exists(self.storage_filename, "batches"):
+                return await self.data_manager.load_bytes(self.storage_filename, "batches")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to load users from S3: {e}")
+            return None
     
     def _save_users(self):
-        """保存用户数据到磁盘"""
+        """保存用户数据到存储（支持本地文件或 S3）"""
+        if self.data_manager:
+            # 使用 DataManager（可能是 S3）
+            try:
+                data = json.dumps(self._users, ensure_ascii=False, indent=2).encode('utf-8')
+                # 检查是否有事件循环在运行
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(asyncio.run, self._save_users_async(data))
+                            future.result()
+                    else:
+                        loop.run_until_complete(self._save_users_async(data))
+                except RuntimeError:
+                    asyncio.run(self._save_users_async(data))
+            except Exception as e:
+                logger.error(f"Failed to save users to data_manager: {e}")
+        else:
+            # 使用本地文件
+            try:
+                with open(self.storage_file, "w", encoding="utf-8") as f:
+                    json.dump(self._users, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.error(f"Failed to save users: {e}")
+    
+    async def _save_users_async(self, data: bytes):
+        """异步保存用户数据"""
         try:
-            with open(self.storage_file, "w", encoding="utf-8") as f:
-                json.dump(self._users, f, ensure_ascii=False, indent=2)
+            await self.data_manager.save_bytes(data, self.storage_filename, "batches")
         except Exception as e:
-            logger.error(f"Failed to save users: {e}")
+            logger.error(f"Failed to save users to S3: {e}")
+            raise
     
     def _hash_password(self, password: str) -> str:
         """哈希密码"""

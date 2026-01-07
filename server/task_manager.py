@@ -10,6 +10,7 @@ from enum import Enum
 from typing import Dict, List, Optional, Any
 from pathlib import Path
 from loguru import logger
+import concurrent.futures
 
 
 class VideoItemStatus(Enum):
@@ -307,15 +308,17 @@ class Batch:
 class TaskManager:
     """任务管理器"""
     
-    def __init__(self, storage_dir: str = "./data/batches"):
+    def __init__(self, storage_dir: str = "./data/batches", data_manager=None):
         """
         初始化任务管理器
         
         Args:
-            storage_dir: 批次数据存储目录
+            storage_dir: 批次数据存储目录（当不使用 data_manager 时）
+            data_manager: 数据管理器（可选，如果提供则使用它存储 JSON）
         """
         self.storage_dir = Path(storage_dir)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
+        self.data_manager = data_manager
         
         # 内存中的批次缓存
         self._batches: Dict[str, Batch] = {}
@@ -323,28 +326,114 @@ class TaskManager:
         # 加载已存在的批次
         self._load_batches()
         
-        logger.info(f"TaskManager initialized with {len(self._batches)} batches")
+        storage_type = "S3" if data_manager else "local"
+        logger.info(f"TaskManager initialized with {len(self._batches)} batches (storage: {storage_type})")
     
     def _get_batch_file(self, batch_id: str) -> Path:
         """获取批次文件路径"""
         return self.storage_dir / f"{batch_id}.json"
     
     def _load_batches(self):
-        """从磁盘加载所有批次"""
-        for batch_file in self.storage_dir.glob("*.json"):
+        """从存储加载所有批次（支持本地文件或 S3）"""
+        if self.data_manager:
+            # 使用 DataManager（可能是 S3）
             try:
-                with open(batch_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    batch = Batch.from_dict(data)
-                    self._batches[batch.id] = batch
+                # 列出所有批次文件
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(asyncio.run, self._load_batches_async())
+                            files = future.result()
+                    else:
+                        files = loop.run_until_complete(self._load_batches_async())
+                except RuntimeError:
+                    files = asyncio.run(self._load_batches_async())
+                
+                # 加载每个批次
+                for filename in files:
+                    if filename.endswith('.json'):
+                        batch_id = filename[:-5]  # 移除 .json 后缀
+                        try:
+                            try:
+                                loop = asyncio.get_event_loop()
+                                if loop.is_running():
+                                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                                        future = executor.submit(asyncio.run, self._load_batch_async(batch_id))
+                                        data_bytes = future.result()
+                                else:
+                                    data_bytes = loop.run_until_complete(self._load_batch_async(batch_id))
+                            except RuntimeError:
+                                data_bytes = asyncio.run(self._load_batch_async(batch_id))
+                            
+                            if data_bytes:
+                                data = json.loads(data_bytes.decode('utf-8'))
+                                batch = Batch.from_dict(data)
+                                self._batches[batch.id] = batch
+                        except Exception as e:
+                            logger.error(f"Failed to load batch {batch_id}: {e}")
             except Exception as e:
-                logger.error(f"Failed to load batch {batch_file}: {e}")
+                logger.error(f"Failed to load batches from data_manager: {e}")
+        else:
+            # 使用本地文件
+            for batch_file in self.storage_dir.glob("*.json"):
+                try:
+                    with open(batch_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        batch = Batch.from_dict(data)
+                        self._batches[batch.id] = batch
+                except Exception as e:
+                    logger.error(f"Failed to load batch {batch_file}: {e}")
+    
+    async def _load_batches_async(self) -> List[str]:
+        """异步列出所有批次文件"""
+        try:
+            return await self.data_manager.list_files("batches")
+        except Exception as e:
+            logger.error(f"Failed to list batches from S3: {e}")
+            return []
+    
+    async def _load_batch_async(self, batch_id: str) -> bytes:
+        """异步加载单个批次"""
+        try:
+            filename = f"{batch_id}.json"
+            return await self.data_manager.load_bytes(filename, "batches")
+        except Exception as e:
+            logger.error(f"Failed to load batch {batch_id} from S3: {e}")
+            return None
     
     def _save_batch(self, batch: Batch):
-        """保存批次到磁盘"""
-        batch_file = self._get_batch_file(batch.id)
-        with open(batch_file, "w", encoding="utf-8") as f:
-            json.dump(batch.to_dict(), f, ensure_ascii=False, indent=2)
+        """保存批次到存储（支持本地文件或 S3）"""
+        if self.data_manager:
+            # 使用 DataManager（可能是 S3）
+            try:
+                data = json.dumps(batch.to_dict(), ensure_ascii=False, indent=2).encode('utf-8')
+                filename = f"{batch.id}.json"
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(asyncio.run, self._save_batch_async(filename, data))
+                            future.result()
+                    else:
+                        loop.run_until_complete(self._save_batch_async(filename, data))
+                except RuntimeError:
+                    asyncio.run(self._save_batch_async(filename, data))
+            except Exception as e:
+                logger.error(f"Failed to save batch to data_manager: {e}")
+        else:
+            # 使用本地文件
+            batch_file = self._get_batch_file(batch.id)
+            with open(batch_file, "w", encoding="utf-8") as f:
+                json.dump(batch.to_dict(), f, ensure_ascii=False, indent=2)
+    
+    async def _save_batch_async(self, filename: str, data: bytes):
+        """异步保存批次"""
+        try:
+            await self.data_manager.save_bytes(data, filename, "batches")
+        except Exception as e:
+            logger.error(f"Failed to save batch to S3: {e}")
+            raise
     
     def create_batch(
         self,

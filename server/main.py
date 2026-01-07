@@ -78,7 +78,6 @@ init_data_directory()
 
 # 初始化组件
 data_dir = os.getenv("DATA_DIR", "./data")
-auth_manager = AuthManager()
 
 # 选择数据管理器：S3 或本地
 STORAGE_TYPE = os.getenv("STORAGE_TYPE", "local").lower()
@@ -101,7 +100,9 @@ else:
     data_manager = LocalDataManager(base_dir=data_dir)
     logger.info(f"Using LocalDataManager for storage (base_dir: {data_dir})")
 
-task_manager = TaskManager(storage_dir=f"{data_dir}/batches")
+# 初始化 AuthManager 和 TaskManager，传入 data_manager 以支持 S3 存储 JSON
+auth_manager = AuthManager(data_manager=data_manager)
+task_manager = TaskManager(storage_dir=f"{data_dir}/batches", data_manager=data_manager)
 
 # S2V API 配置
 S2V_BASE_URL = os.getenv("LIGHTX2V_BASE_URL", "https://x2v.light-ai.top")
