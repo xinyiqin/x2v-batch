@@ -39,10 +39,12 @@ DEPLOY_SMALL_SCALE.md
 DEPLOY.md
 QUICK_DEPLOY.md
 README_DEPLOY.md
-railway.json
 render.yaml
 vercel.json
 docker-compose.simple.yml
 nginx.prod.conf
 start_prod.sh
 deploy.sh
+
+# Keep railway.json for Railway deployment
+# railway.json
