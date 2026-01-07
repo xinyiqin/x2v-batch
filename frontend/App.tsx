@@ -17,6 +17,7 @@ const App: React.FC = () => {
   const [currentViewState, setCurrentViewState] = useState<ViewState>('create');
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   const [lang, setLang] = useState<Language>('zh');
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
 
   const t = translations[lang];
 
@@ -191,6 +192,7 @@ const App: React.FC = () => {
         onNewProject={handleNewProject}
         onOpenAdmin={handleOpenAdmin}
         onLogout={handleLogout}
+        onOpenChangePassword={() => setShowChangePasswordModal(true)}
         selectedId={selectedBatchId}
         lang={lang}
         setLang={setLang}
@@ -198,6 +200,13 @@ const App: React.FC = () => {
         username={activeUser.username}
         isAdmin={activeUser.isAdmin}
         currentView={currentViewState}
+      />
+
+      {/* Change Password Modal */}
+      <ChangePasswordModal
+        isOpen={showChangePasswordModal}
+        onClose={() => setShowChangePasswordModal(false)}
+        lang={lang}
       />
 
       {/* Main Content Area */}
