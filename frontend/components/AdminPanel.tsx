@@ -66,6 +66,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ users, batches, onUpdate
     }
   };
 
+  const handleUpdateToken = async () => {
+    if (!newToken.trim()) {
+      alert(t.tokenRequired || 'Token is required');
+      return;
+    }
+
+    setIsUpdatingToken(true);
+    try {
+      const result = await updateS2VToken(newToken.trim());
+      setShowTokenModal(false);
+      setNewToken('');
+      if (result.warning) {
+        alert(`${result.message}\n警告: ${result.warning}`);
+      } else {
+        alert(result.message || 'Token updated successfully');
+      }
+      // 触发 token 状态重新检查（通过自定义事件）
+      window.dispatchEvent(new CustomEvent('tokenUpdated'));
+    } catch (error: any) {
+      const errorMsg = error?.detail || error?.message || 'Failed to update token';
+      alert(errorMsg);
+    } finally {
+      setIsUpdatingToken(false);
+    }
+  };
+
   return (
     <div className="space-y-12">
       {/* User Management Section */}

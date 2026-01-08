@@ -59,7 +59,16 @@ const App: React.FC = () => {
     // 每30秒检查一次
     const interval = setInterval(checkStatus, 30000);
 
-    return () => clearInterval(interval);
+    // 监听 token 更新事件
+    const handleTokenUpdated = () => {
+      checkStatus();
+    };
+    window.addEventListener('tokenUpdated', handleTokenUpdated);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('tokenUpdated', handleTokenUpdated);
+    };
   }, [activeUser]);
 
   // 加载用户批次

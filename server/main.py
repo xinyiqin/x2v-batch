@@ -686,33 +686,31 @@ async def export_batch_videos(
         from urllib.parse import quote
         encoded_filename = quote(download_filename.encode('utf-8'))
         
-        # 创建生成器函数来流式传输文件（分块读取，避免内存问题）
-        def generate():
-            try:
-                with open(temp_zip_path, 'rb') as f:
-                    while True:
-                        chunk = f.read(8192)  # 8KB chunks for better streaming
-                        if not chunk:
-                            break
-                        yield chunk
-            finally:
-                # 清理临时文件
-                try:
-                    os.unlink(temp_zip_path)
-                except Exception as e:
-                    logger.warning(f"Failed to cleanup temp zip file: {e}")
-        
         logger.info(f"Returning zip file: {download_filename}, size: {zip_size} bytes, added_count: {added_count}")
         
-        return StreamingResponse(
-            generate(),
+        # 在 Railway 环境中，使用 FileResponse 更可靠
+        # 延迟清理临时文件，确保响应已发送
+        import asyncio
+        async def cleanup_file():
+            await asyncio.sleep(10)  # 等待10秒确保响应已发送
+            try:
+                if os.path.exists(temp_zip_path):
+                    os.unlink(temp_zip_path)
+                    logger.debug(f"Cleaned up temp zip file: {temp_zip_path}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup temp zip file: {e}")
+        asyncio.create_task(cleanup_file())
+        
+        # 使用 FileResponse，它会在文件发送完成后自动关闭文件句柄
+        return FileResponse(
+            temp_zip_path,
             media_type='application/zip',
+            filename=download_filename,
             headers={
                 'Content-Disposition': f'attachment; filename="{download_filename}"; filename*=UTF-8\'\'{encoded_filename}',
-                'Content-Length': str(zip_size),
-                'Content-Type': 'application/zip',
-                'Cache-Control': 'no-cache',
-                'Accept-Ranges': 'bytes',
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache',
+                'Expires': '0',
                 'X-Content-Type-Options': 'nosniff'
             }
         )
