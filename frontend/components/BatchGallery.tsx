@@ -58,54 +58,57 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
     });
   };
 
-  // 导出全部已完成的视频为zip文件
+  // 批量下载所有已完成的视频（前端直接下载，不经过后端打包）
   const handleExportAll = async () => {
     const completedItems = currentBatch.items.filter(
       item => item.status === 'completed' && item.videoUrl && item.videoUrl.trim()
     );
 
     if (completedItems.length === 0) {
-      alert(lang === 'zh' ? '没有已完成的视频可以导出' : 'No completed videos to export');
+      alert(lang === 'zh' ? '没有已完成的视频可以下载' : 'No completed videos to download');
       return;
     }
 
     setIsExporting(true);
 
     try {
-      const { exportBatchVideos } = await import('../api');
+      const { getBatchExportList, batchDownloadFiles } = await import('../api');
       
-      // 调用后端API获取zip文件
-      const zipBlob = await exportBatchVideos(currentBatch.id);
+      // 获取下载清单
+      const exportList = await getBatchExportList(currentBatch.id);
       
-      // 检查 blob 是否有效
-      if (!zipBlob || zipBlob.size === 0) {
-        throw new Error(lang === 'zh' ? '下载的文件为空' : 'Downloaded file is empty');
+      if (!exportList.files || exportList.files.length === 0) {
+        throw new Error(lang === 'zh' ? '没有可下载的文件' : 'No files to download');
       }
       
-      // 创建下载链接
-      const url = window.URL.createObjectURL(zipBlob);
-      const link = document.createElement('a');
-      link.href = url;
+      // 批量下载文件（带进度提示）
+      let currentCount = 0;
+      const total = exportList.files.length;
       
-      // 生成文件名
-      const batchNameSafe = currentBatch.name.replace(/[^a-zA-Z0-9-_ ]/g, '').trim();
-      const timestamp = new Date().toISOString().slice(0, 10);
-      link.download = `${batchNameSafe}_${timestamp}.zip`;
+      // 显示进度提示
+      const progressMsg = lang === 'zh' 
+        ? `正在下载 ${currentCount} / ${total} 个视频…`
+        : `Downloading ${currentCount} / ${total} videos…`;
       
-      // 触发下载
-      document.body.appendChild(link);
-      link.click();
+      await batchDownloadFiles(exportList.files, (current, total) => {
+        currentCount = current;
+        // 更新进度提示（可选，如果需要实时显示）
+        if (current % 5 === 0 || current === total) {
+          console.log(`${progressMsg.replace(/\d+/, current.toString())}`);
+        }
+      });
       
-      // 清理
-      setTimeout(() => {
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(url);
-        setIsExporting(false);
-      }, 100);
+      // 下载完成提示
+      alert(lang === 'zh' 
+        ? `已开始下载 ${exportList.total} 个视频，请在浏览器下载列表查看`
+        : `Started downloading ${exportList.total} videos, please check your browser's download list`
+      );
+      
+      setIsExporting(false);
       
     } catch (error: any) {
-      console.error('Export failed:', error);
-      const errorMsg = error?.message || (lang === 'zh' ? '导出过程中出现错误' : 'Export failed');
+      console.error('Batch download failed:', error);
+      const errorMsg = error?.message || (lang === 'zh' ? '批量下载过程中出现错误' : 'Batch download failed');
       alert(errorMsg);
       setIsExporting(false);
     }

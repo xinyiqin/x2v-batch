@@ -560,7 +560,7 @@ async def export_batch_videos(
     batch_id: str,
     user: dict = Depends(get_current_user),
 ):
-    """导出批次的所有已完成视频为zip文件"""
+    """获取批次的所有已完成视频下载清单（用于前端批量下载）"""
     from server.task_manager import VideoItemStatus
     
     batch = task_manager.get_batch(batch_id)
@@ -589,145 +589,49 @@ async def export_batch_videos(
             detail="No completed videos to export"
         )
     
-    # 创建临时zip文件
-    temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
-    temp_zip_path = temp_zip.name
-    temp_zip.close()
+    # 构建文件下载清单（前端直接批量下载，不打包）
+    files = []
+    for item in completed_items:
+        # 优先使用 video_url（CDN 链接）
+        if item.video_url:
+            # 从 URL 提取文件名，或使用 item_id
+            url_path = item.video_url.split('?')[0]  # 移除查询参数
+            url_filename = os.path.basename(url_path)
+            # 如果 URL 中没有文件名或文件名无效，使用 item_id
+            if not url_filename or url_filename == url_path or '.' not in url_filename:
+                url_filename = f"{item.id}.mp4"
+            # 确保文件名安全（保留扩展名，移除特殊字符）
+            name_part, ext = os.path.splitext(url_filename)
+            safe_name = "".join(c for c in name_part if c.isalnum() or c in ('-', '_')).strip()
+            if not safe_name:
+                safe_name = item.id
+            safe_filename = f"{safe_name}{ext}" if ext else f"{safe_name}.mp4"
+            
+            files.append({
+                "name": safe_filename,
+                "url": item.video_url,
+                "id": item.id
+            })
+        elif item.video_filename:
+            # 如果有 video_filename，构建后端文件 URL（使用相对路径，前端会自动补全）
+            from urllib.parse import quote
+            encoded_filename = quote(item.video_filename.encode('utf-8'))
+            file_url = f"/api/files/videos/{encoded_filename}"
+            
+            files.append({
+                "name": item.video_filename,
+                "url": file_url,
+                "id": item.id
+            })
     
-    try:
-        import aiohttp
-        
-        # 创建zip文件并添加视频
-        added_count = 0
-        with zipfile.ZipFile(temp_zip_path, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            async with aiohttp.ClientSession() as session:
-                for item in completed_items:
-                    try:
-                        video_data = None
-                        file_ext = '.mp4'
-                        
-                        # 优先使用 video_filename（本地或S3存储）
-                        if item.video_filename:
-                            try:
-                                video_data = await data_manager.load_bytes(item.video_filename, "videos")
-                                file_ext = os.path.splitext(item.video_filename)[1] or '.mp4'
-                                logger.info(f"Loaded video {item.id} from data_manager: {item.video_filename}")
-                            except Exception as e:
-                                logger.warning(f"Failed to load video {item.id} from data_manager: {e}, trying video_url")
-                        
-                        # 如果没有 video_filename 或加载失败，尝试从 video_url 下载
-                        if not video_data and item.video_url:
-                            try:
-                                async with session.get(item.video_url, timeout=aiohttp.ClientTimeout(total=60)) as response:
-                                    if response.status == 200:
-                                        video_data = await response.read()
-                                        # 尝试从 URL 或 Content-Type 获取扩展名
-                                        content_type = response.headers.get('Content-Type', '')
-                                        if 'mp4' in content_type:
-                                            file_ext = '.mp4'
-                                        elif 'webm' in content_type:
-                                            file_ext = '.webm'
-                                        else:
-                                            # 从 URL 提取扩展名
-                                            url_path = item.video_url.split('?')[0]  # 移除查询参数
-                                            url_ext = os.path.splitext(url_path)[1]
-                                            if url_ext:
-                                                file_ext = url_ext
-                                        logger.info(f"Downloaded video {item.id} from URL: {item.video_url}")
-                                    else:
-                                        logger.error(f"Failed to download video {item.id} from URL: HTTP {response.status}")
-                            except Exception as e:
-                                logger.error(f"Failed to download video {item.id} from URL: {e}")
-                        
-                        # 如果成功获取视频数据，添加到zip
-                        if video_data:
-                            zip_filename = f"{item.id}{file_ext}"
-                            # 确保文件名是字符串，并且使用 ZipInfo 来支持 UTF-8 编码
-                            try:
-                                # 尝试直接写入（适用于 ASCII 文件名）
-                                zip_file.writestr(zip_filename, video_data)
-                            except (UnicodeEncodeError, ValueError):
-                                # 如果包含非 ASCII 字符，使用 ZipInfo 并设置 UTF-8 标志
-                                zip_info = zipfile.ZipInfo(zip_filename)
-                                # 设置 UTF-8 标志位（0x800 = UTF-8 encoding flag）
-                                zip_info.flag_bits = 0x800
-                                zip_file.writestr(zip_info, video_data)
-                            added_count += 1
-                            logger.info(f"Added video {item.id} to zip: {zip_filename}")
-                        else:
-                            logger.warning(f"Skipping video {item.id}: no video data available")
-                            
-                    except Exception as e:
-                        logger.error(f"Failed to add video {item.id} to zip: {e}")
-                        # 继续处理其他视频，不中断整个导出过程
-        
-        # 检查是否有视频被成功添加到zip
-        if added_count == 0:
-            # 清理临时文件
-            try:
-                os.unlink(temp_zip_path)
-            except:
-                pass
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No videos could be downloaded or loaded for export"
-            )
-        
-        # 生成下载文件名（确保只包含 ASCII 字符）
-        batch_name_safe = "".join(c for c in batch.name if c.isascii() and (c.isalnum() or c in (' ', '-', '_'))).rstrip()
-        if not batch_name_safe:
-            batch_name_safe = "batch"
-        download_filename = f"{batch_name_safe}_{batch_id}.zip"
-        
-        # 获取zip文件大小
-        zip_size = os.path.getsize(temp_zip_path)
-        
-        # 对文件名进行 URL 编码以支持非 ASCII 字符
-        from urllib.parse import quote
-        encoded_filename = quote(download_filename.encode('utf-8'))
-        
-        logger.info(f"Returning zip file: {download_filename}, size: {zip_size} bytes, added_count: {added_count}")
-        
-        # 在 Railway 环境中，使用 FileResponse 更可靠
-        # 延迟清理临时文件，确保响应已发送
-        import asyncio
-        async def cleanup_file():
-            await asyncio.sleep(10)  # 等待10秒确保响应已发送
-            try:
-                if os.path.exists(temp_zip_path):
-                    os.unlink(temp_zip_path)
-                    logger.debug(f"Cleaned up temp zip file: {temp_zip_path}")
-            except Exception as e:
-                logger.warning(f"Failed to cleanup temp zip file: {e}")
-        asyncio.create_task(cleanup_file())
-        
-        # 使用 FileResponse，它会在文件发送完成后自动关闭文件句柄
-        return FileResponse(
-            temp_zip_path,
-            media_type='application/zip',
-            filename=download_filename,
-            headers={
-                'Content-Disposition': f'attachment; filename="{download_filename}"; filename*=UTF-8\'\'{encoded_filename}',
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                'Pragma': 'no-cache',
-                'Expires': '0',
-                'X-Content-Type-Options': 'nosniff'
-            }
-        )
-        
-    except Exception as e:
-        # 清理临时文件
-        try:
-            if os.path.exists(temp_zip_path):
-                os.unlink(temp_zip_path)
-        except:
-            pass
-        
-        logger.error(f"Failed to create zip file: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create zip file: {str(e)}"
-        )
+    logger.info(f"Returning download list for batch {batch_id}: {len(files)} files")
+    
+    return {
+        "batch_id": batch_id,
+        "batch_name": batch.name,
+        "files": files,
+        "total": len(files)
+    }
 
 
 # ==================== 管理员接口 ====================

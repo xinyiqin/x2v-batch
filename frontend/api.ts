@@ -422,122 +422,91 @@ export async function checkTokenStatus(): Promise<{ valid: boolean; error?: stri
   return request<{ valid: boolean; error?: string }>('/api/token/status');
 }
 
-// 导出批次的所有视频为zip文件
-export async function exportBatchVideos(batchId: string): Promise<Blob> {
+export interface ExportFile {
+  name: string;
+  url: string;
+  id: string;
+}
+
+export interface ExportBatchResponse {
+  batch_id: string;
+  batch_name: string;
+  files: ExportFile[];
+  total: number;
+}
+
+// 获取批次的所有已完成视频下载清单
+export async function getBatchExportList(batchId: string): Promise<ExportBatchResponse> {
   const token = getToken();
   if (!token) {
     throw new Error('Not authenticated');
   }
 
-  console.log(`[Export] Starting export for batch: ${batchId}`);
-  
-  // 创建一个 AbortController 用于超时控制（10分钟超时）
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
-    controller.abort();
-  }, 10 * 60 * 1000); // 10分钟超时
-  
-  try {
-    const response = await fetch(`${API_BASE}/api/video/batches/${batchId}/export`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
-      signal: controller.signal,
-    });
+  const response = await fetch(`${API_BASE}/api/video/batches/${batchId}/export`, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+    },
+  });
 
-    console.log(`[Export] Response status: ${response.status}, headers:`, {
-      'content-type': response.headers.get('content-type'),
-      'content-length': response.headers.get('content-length'),
-      'content-disposition': response.headers.get('content-disposition'),
-    });
-
-    if (response.status === 401) {
-      clearTimeout(timeoutId);
-      clearToken();
-      window.location.reload();
-      throw new Error('Unauthorized');
-    }
-
-    if (!response.ok) {
-      clearTimeout(timeoutId);
-      // 尝试解析错误响应
-      let errorMessage = `HTTP ${response.status}`;
-      try {
-        const contentType = response.headers.get('content-type');
-        if (contentType && contentType.includes('application/json')) {
-          const error = await response.json();
-          errorMessage = error.detail || error.message || errorMessage;
-        } else {
-          const text = await response.text();
-          if (text) {
-            errorMessage = text.substring(0, 200);
-          }
-        }
-      } catch (e) {
-        // 如果解析失败，使用默认错误信息
-        console.error('[Export] Failed to parse error response:', e);
-      }
-      throw new Error(errorMessage);
-    }
-
-    // 检查响应类型
-    const contentType = response.headers.get('content-type');
-    console.log(`[Export] Content-Type: ${contentType}`);
-    
-    // 尝试读取 blob，即使 content-type 不完全匹配
-    try {
-      const blob = await response.blob();
-      console.log(`[Export] Blob received, size: ${blob.size} bytes, type: ${blob.type}`);
-      
-      if (blob.size === 0) {
-        clearTimeout(timeoutId);
-        throw new Error('Downloaded file is empty');
-      }
-      
-      // 验证是否是 zip 文件（检查前几个字节）
-      const arrayBuffer = await blob.slice(0, 4).arrayBuffer();
-      const uint8Array = new Uint8Array(arrayBuffer);
-      // ZIP 文件签名：PK\x03\x04 或 PK\x05\x06
-      const isZip = uint8Array[0] === 0x50 && uint8Array[1] === 0x4B;
-      
-      if (!isZip && !contentType?.includes('application/zip')) {
-        clearTimeout(timeoutId);
-        // 如果不是 zip 文件，尝试读取为文本查看错误信息
-        const text = await blob.text();
-        throw new Error(`Unexpected response type. Response: ${text.substring(0, 200)}`);
-      }
-      
-      clearTimeout(timeoutId);
-      return blob;
-    } catch (error: any) {
-      clearTimeout(timeoutId);
-      console.error('[Export] Failed to read blob:', error);
-      
-      // 检查是否是超时错误
-      if (error.name === 'AbortError') {
-        throw new Error('Export timeout: The operation took too long. Please try again or contact support.');
-      }
-      
-      // 如果读取 blob 失败，尝试读取为文本查看错误信息
-      try {
-        const text = await response.text();
-        throw new Error(`Failed to download zip file: ${text.substring(0, 200)}`);
-      } catch (e) {
-        throw error;
-      }
-    }
-  } catch (error: any) {
-    clearTimeout(timeoutId);
-    
-    // 检查是否是超时错误
-    if (error.name === 'AbortError') {
-      throw new Error('Export timeout: The operation took too long. Please try again or contact support.');
-    }
-    
-    // 重新抛出其他错误
-    throw error;
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+    throw new Error('Unauthorized');
   }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// 批量下载文件（前端直接下载，不经过后端）
+export async function batchDownloadFiles(files: ExportFile[], onProgress?: (current: number, total: number) => void): Promise<void> {
+  // 并发下载，限制并发数为 4
+  const limit = 4;
+  let currentIndex = 0;
+  let completedCount = 0;
+  const total = files.length;
+
+  async function downloadOne(file: ExportFile): Promise<void> {
+    const a = document.createElement('a');
+    // 如果是相对路径，补全为完整 URL
+    const url = file.url.startsWith('http') ? file.url : `${API_BASE}${file.url}`;
+    a.href = url;
+    a.download = file.name;
+    a.rel = 'noopener noreferrer';
+    a.style.display = 'none';
+    a.target = '_blank'; // 某些浏览器需要这个
+    
+    document.body.appendChild(a);
+    a.click();
+    
+    // 延迟移除，确保点击事件被触发
+    setTimeout(() => {
+      document.body.removeChild(a);
+    }, 100);
+    
+    completedCount++;
+    if (onProgress) {
+      onProgress(completedCount, total);
+    }
+    
+    // 给浏览器一点喘息空间，防止被判定为恶意下载
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+
+  async function worker(): Promise<void> {
+    while (currentIndex < files.length) {
+      const file = files[currentIndex++];
+      await downloadOne(file);
+    }
+  }
+
+  // 启动多个 worker 并发下载
+  await Promise.all(Array.from({ length: Math.min(limit, files.length) }, () => worker()));
 }
 
 export { clearToken, getToken };
