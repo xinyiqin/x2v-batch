@@ -21,9 +21,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ users, batches, onUpdate
   const [newCredits, setNewCredits] = useState(100);
   const [isCreating, setIsCreating] = useState(false);
 
-  // 计算非admin用户的任务总数
+  // 计算非admin用户的任务总数和视频总数
   const nonAdminUserIds = new Set(users.filter(u => !u.isAdmin).map(u => u.id));
-  const nonAdminBatchesCount = batches.filter(b => nonAdminUserIds.has(b.userId)).length;
+  const nonAdminBatches = batches.filter(b => nonAdminUserIds.has(b.userId));
+  const nonAdminBatchesCount = nonAdminBatches.length;
+  const nonAdminVideosCount = nonAdminBatches.reduce((sum, batch) => sum + (batch.imageCount || 0), 0);
 
 
   const startEditing = (user: User) => {
@@ -74,6 +76,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ users, batches, onUpdate
               <h2 className="text-3xl font-semibold text-white tracking-tight">{t.userManagement}</h2>
               <p className="text-sm text-gray-400 mt-1">
                 {t.totalTasksByNonAdmin}: <span className="text-[#90dce1] font-semibold">{nonAdminBatchesCount}</span>
+                {t.totalVideosByNonAdmin && (
+                  <> | {t.totalVideosByNonAdmin}: <span className="text-[#90dce1] font-semibold">{nonAdminVideosCount}</span></>
+                )}
               </p>
             </div>
           </div>
@@ -138,6 +143,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ users, batches, onUpdate
                 <th className="px-8 py-5">{t.user}</th>
                 <th className="px-8 py-5">{t.batchNamePrefix}</th>
                 <th className="px-8 py-5">{t.videosCount.replace('{count}', '')}</th>
+                <th className="px-8 py-5">{t.creditsUsed}</th>
                 <th className="px-8 py-5">{t.created}</th>
               </tr>
             </thead>
@@ -150,12 +156,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ users, batches, onUpdate
                   </td>
                   <td className="px-8 py-5 text-gray-300">{batch.name}</td>
                   <td className="px-8 py-5 text-gray-300 font-mono">{batch.imageCount}</td>
+                  <td className="px-8 py-5 text-gray-300">
+                    {batch.creditsUsed !== undefined && batch.creditsUsed > 0 ? (
+                      <span className="font-mono">{batch.creditsUsed} {t.credits}</span>
+                    ) : (
+                      <span className="text-gray-500">-</span>
+                    )}
+                  </td>
                   <td className="px-8 py-5 text-gray-400">{new Date(batch.timestamp).toLocaleString()}</td>
                 </tr>
               ))}
               {batches.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-8 py-16 text-center text-gray-500 italic">
+                  <td colSpan={5} className="px-8 py-16 text-center text-gray-500 italic">
                     {t.noBatches}
                   </td>
                 </tr>

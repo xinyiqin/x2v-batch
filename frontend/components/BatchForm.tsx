@@ -15,6 +15,7 @@ export const BatchForm: React.FC<BatchFormProps> = ({ onCreated, lang, userCredi
   const [images, setImages] = useState<File[]>([]);
   const [audio, setAudio] = useState<File | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioDuration, setAudioDuration] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -23,7 +24,17 @@ export const BatchForm: React.FC<BatchFormProps> = ({ onCreated, lang, userCredi
   const audioInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const canAfford = userCredits >= images.length;
+  // 计算每个视频的积分：音频长度 ≤ 30s = 1积分，> 30s = ceil(时长/30)积分
+  const calculateCreditsPerVideo = (duration: number | null): number => {
+    if (!duration) return 1; // 默认1积分
+    if (duration <= 30) return 1;
+    return Math.ceil(duration / 30);
+  };
+
+  // 计算总积分：每个视频积分 × 图片数量
+  const creditsPerVideo = calculateCreditsPerVideo(audioDuration);
+  const totalCredits = creditsPerVideo * images.length;
+  const canAfford = userCredits >= totalCredits;
 
   useEffect(() => {
     return () => {
@@ -49,8 +60,15 @@ export const BatchForm: React.FC<BatchFormProps> = ({ onCreated, lang, userCredi
       const file = e.target.files[0];
       setAudio(file);
       if (audioUrl) URL.revokeObjectURL(audioUrl);
-      setAudioUrl(URL.createObjectURL(file));
+      const url = URL.createObjectURL(file);
+      setAudioUrl(url);
       setIsPlaying(false);
+      
+      // 检测音频时长
+      const audio = new Audio(url);
+      audio.addEventListener('loadedmetadata', () => {
+        setAudioDuration(audio.duration);
+      });
     }
   };
 
@@ -163,8 +181,17 @@ export const BatchForm: React.FC<BatchFormProps> = ({ onCreated, lang, userCredi
                     ref={audioRef} 
                     src={audioUrl} 
                     onEnded={() => setIsPlaying(false)}
+                    onLoadedMetadata={(e) => {
+                      const duration = (e.target as HTMLAudioElement).duration;
+                      setAudioDuration(duration);
+                    }}
                     className="hidden"
                   />
+                  {audioDuration && (
+                    <div className="text-xs text-gray-400">
+                      {t.audioDuration || 'Duration'}: {Math.floor(audioDuration)}s
+                    </div>
+                  )}
                   <button
                     type="button"
                     onClick={togglePlayback}
@@ -222,11 +249,25 @@ export const BatchForm: React.FC<BatchFormProps> = ({ onCreated, lang, userCredi
 
       <div className="pt-4 space-y-3">
         {images.length > 0 && (
-          <div className="flex justify-between text-xs font-mono">
-            <span className="text-gray-500">{t.costInfo.replace('{count}', images.length.toString())}</span>
-            <span className={canAfford ? 'text-green-500' : 'text-red-500'}>
-              {canAfford ? '✔' : t.insufficientCredits}
-            </span>
+          <div className="space-y-2">
+            <div className="flex justify-between text-xs font-mono">
+              <span className="text-gray-500">
+                {t.costInfo.replace('{count}', totalCredits.toString())}
+                {audioDuration && (
+                  <span className="ml-2 text-gray-400">
+                    ({t.creditsPerVideo}: {creditsPerVideo} × {images.length} {t.videos || 'videos'})
+                  </span>
+                )}
+              </span>
+              <span className={canAfford ? 'text-green-500' : 'text-red-500'}>
+                {canAfford ? '✔' : t.insufficientCredits}
+              </span>
+            </div>
+            {audioDuration && (
+              <div className="text-xs text-gray-400">
+                {t.creditRuleInfo || 'Credit rule: ≤30s = 1 credit/video, >30s = ceil(duration/30) credits/video'}
+              </div>
+            )}
           </div>
         )}
         <button

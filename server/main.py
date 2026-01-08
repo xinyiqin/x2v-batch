@@ -6,8 +6,10 @@ import asyncio
 import json
 import zipfile
 import tempfile
+import math
 from pathlib import Path
 from typing import Optional
+from io import BytesIO
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +17,14 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 import uvicorn
+
+# 尝试导入音频处理库
+try:
+    from mutagen import File as MutagenFile
+    MUTAGEN_AVAILABLE = True
+except ImportError:
+    MUTAGEN_AVAILABLE = False
+    logger.warning("mutagen not installed, audio duration detection may not work. Install with: pip install mutagen")
 
 from server.auth import AuthManager
 from server.data_manager import LocalDataManager
@@ -24,14 +34,54 @@ from server.batch_processor import BatchProcessor
 # 延迟导入 S3DataManager，只在需要时导入
 S3DataManager = None
 
+async def get_audio_duration(audio_data: bytes) -> float:
+    """
+    获取音频时长（秒）
+    
+    Args:
+        audio_data: 音频文件的字节数据
+        
+    Returns:
+        音频时长（秒），如果无法检测则返回默认值 30.0
+    """
+    if not MUTAGEN_AVAILABLE:
+        logger.warning("mutagen not available, using default audio duration 30.0s")
+        return 30.0
+    
+    try:
+        # 使用 mutagen 读取音频元数据
+        audio_file = MutagenFile(BytesIO(audio_data))
+        if audio_file is None:
+            logger.warning("Failed to parse audio file, using default duration 30.0s")
+            return 30.0
+        
+        duration = audio_file.info.length if hasattr(audio_file, 'info') and hasattr(audio_file.info, 'length') else None
+        if duration is None or duration <= 0:
+            logger.warning(f"Invalid audio duration: {duration}, using default 30.0s")
+            return 30.0
+        
+        logger.debug(f"Detected audio duration: {duration:.2f}s")
+        return float(duration)
+    except Exception as e:
+        logger.warning(f"Failed to detect audio duration: {e}, using default 30.0s")
+        return 30.0
+
 # 初始化数据目录（仅用于本地存储）
 def init_data_directory():
     """初始化数据目录和初始数据（仅用于本地存储）"""
-    # 检查存储类型，如果是 S3 则跳过本地目录初始化
+    # 检查任务存储类型，如果 task 存储在 S3，则跳过本地 users.json 初始化
+    # users.json 现在与 task 数据存储位置一致
+    task_storage_type = os.getenv("TASK_STORAGE_TYPE", "local").lower()
+    if task_storage_type == "s3":
+        logger.info("Using S3 for task storage, users.json will be stored in S3 (skipping local initialization)")
+    
+    # 检查数据存储类型，如果 data 存储在 S3，则跳过本地数据目录初始化
     storage_type = os.getenv("STORAGE_TYPE", "local").lower()
     if storage_type == "s3":
-        logger.info("Using S3 storage, skipping local data directory initialization")
-        return
+        logger.info("Using S3 for data storage, skipping local data directory initialization")
+        # 如果 task 存储也是 S3，完全跳过本地初始化
+        if task_storage_type == "s3":
+            return
     
     data_dir = os.getenv("DATA_DIR", "./data")
     try:
@@ -46,37 +96,44 @@ def init_data_directory():
         base_path = PathLib(data_dir)
         base_path.mkdir(parents=True, exist_ok=True)
         
-        # 创建子目录
-        for subdir in ["images", "audios", "videos", "batches"]:
-            (base_path / subdir).mkdir(parents=True, exist_ok=True)
+        # 创建子目录（仅用于本地数据存储）
+        if storage_type != "s3":
+            for subdir in ["images", "audios", "videos"]:
+                (base_path / subdir).mkdir(parents=True, exist_ok=True)
         
-        # 初始化 users.json（如果不存在，仅用于本地存储）
-        users_file = base_path / "users.json"
-        if not users_file.exists():
-            import hashlib
-            import json
-            def hash_password(password: str) -> str:
-                return hashlib.sha256(password.encode()).hexdigest()
-            
-            # 从环境变量获取管理员初始密码，默认使用 admin8888
-            admin_password = os.getenv("ADMIN_PASSWORD", "admin8888")
-            
-            if not admin_password:
-                admin_password = "admin8888"
-            
-            default_users = {
-                "admin": {
-                    "id": "u-0",
-                    "username": "admin",
-                    "password_hash": hash_password(admin_password),
-                    "credits": 9999,
-                    "is_admin": True,
-                    "created_at": "2026-01-01T00:00:00"
+        # 创建 batches 目录（仅用于本地 task 存储）
+        if task_storage_type != "s3":
+            (base_path / "batches").mkdir(parents=True, exist_ok=True)
+        
+        # 初始化 users.json（如果不存在，仅用于本地 task 存储）
+        # users.json 现在与 task 数据存储位置一致
+        if task_storage_type != "s3":
+            users_file = base_path / "users.json"
+            if not users_file.exists():
+                import hashlib
+                import json
+                def hash_password(password: str) -> str:
+                    return hashlib.sha256(password.encode()).hexdigest()
+                
+                # 从环境变量获取管理员初始密码，默认使用 admin8888
+                admin_password = os.getenv("ADMIN_PASSWORD", "admin8888")
+                
+                if not admin_password:
+                    admin_password = "admin8888"
+                
+                default_users = {
+                    "admin": {
+                        "id": "u-0",
+                        "username": "admin",
+                        "password_hash": hash_password(admin_password),
+                        "credits": 9999,
+                        "is_admin": True,
+                        "created_at": "2026-01-01T00:00:00"
+                    }
                 }
-            }
-            with open(users_file, "w", encoding="utf-8") as f:
-                json.dump(default_users, f, indent=2, ensure_ascii=False)
-            logger.info("✅ Created default users.json with admin user (local storage)")
+                with open(users_file, "w", encoding="utf-8") as f:
+                    json.dump(default_users, f, indent=2, ensure_ascii=False)
+                logger.info("✅ Created default users.json with admin user (local task storage)")
     except Exception as e:
         logger.warning(f"Failed to initialize data directory: {e}")
 
@@ -86,7 +143,7 @@ init_data_directory()
 # 初始化组件
 data_dir = os.getenv("DATA_DIR", "./data")
 
-# 选择数据管理器：S3 或本地
+# 选择数据管理器：用于存储实际文件数据（图片、音频、视频等）
 STORAGE_TYPE = os.getenv("STORAGE_TYPE", "local").lower()
 if STORAGE_TYPE == "s3":
     s3_config = os.getenv("S3_CONFIG")
@@ -98,18 +155,45 @@ if STORAGE_TYPE == "s3":
         try:
             from server.s3_data_manager import S3DataManager
             data_manager = S3DataManager(s3_config)
-            logger.info("Using S3DataManager for storage (will initialize on startup)")
+            logger.info("Using S3DataManager for data storage (will initialize on startup)")
         except ImportError as e:
             logger.error(f"Failed to import S3DataManager: {e}. Please install aioboto3: pip install aioboto3")
             logger.warning("Falling back to local storage")
             data_manager = LocalDataManager(base_dir=data_dir)
 else:
     data_manager = LocalDataManager(base_dir=data_dir)
-    logger.info(f"Using LocalDataManager for storage (base_dir: {data_dir})")
+    logger.info(f"Using LocalDataManager for data storage (base_dir: {data_dir})")
 
-# 初始化 AuthManager 和 TaskManager，传入 data_manager 以支持 S3 存储 JSON
-auth_manager = AuthManager(data_manager=data_manager)
-task_manager = TaskManager(storage_dir=f"{data_dir}/batches", data_manager=data_manager)
+# 选择任务存储管理器：用于存储任务相关的 JSON 数据（batches/*.json, users.json）
+# 可以与 data_manager 独立配置，例如：task 存储在本地，data 存储在 S3
+TASK_STORAGE_TYPE = os.getenv("TASK_STORAGE_TYPE", "local").lower()
+if TASK_STORAGE_TYPE == "s3":
+    task_s3_config = os.getenv("TASK_S3_CONFIG")
+    if not task_s3_config:
+        # 如果没有单独配置 TASK_S3_CONFIG，尝试使用 S3_CONFIG
+        task_s3_config = os.getenv("S3_CONFIG")
+    if not task_s3_config:
+        logger.warning("TASK_STORAGE_TYPE=s3 but TASK_S3_CONFIG not set, falling back to local storage")
+        task_storage_manager = LocalDataManager(base_dir=data_dir)
+    else:
+        try:
+            from server.s3_data_manager import S3DataManager
+            task_storage_manager = S3DataManager(task_s3_config)
+            logger.info("Using S3DataManager for task storage (will initialize on startup)")
+        except ImportError as e:
+            logger.error(f"Failed to import S3DataManager: {e}. Please install aioboto3: pip install aioboto3")
+            logger.warning("Falling back to local storage")
+            task_storage_manager = LocalDataManager(base_dir=data_dir)
+else:
+    task_storage_manager = LocalDataManager(base_dir=data_dir)
+    logger.info(f"Using LocalDataManager for task storage (base_dir: {data_dir})")
+
+# 初始化 AuthManager 和 TaskManager
+# AuthManager 使用 task_storage_manager 存储 users.json
+# TaskManager 使用 task_storage_manager 存储 batches/*.json
+# data_manager 用于存储实际文件数据（图片、音频、视频等）
+auth_manager = AuthManager(data_manager=task_storage_manager)
+task_manager = TaskManager(storage_dir=f"{data_dir}/batches", task_storage_manager=task_storage_manager, data_manager=data_manager)
 
 # S2V API 配置
 S2V_BASE_URL = os.getenv("LIGHTX2V_BASE_URL", "https://x2v.light-ai.top")
@@ -131,17 +215,32 @@ app = FastAPI(title="AI Vision Batch Service")
 @app.on_event("startup")
 async def startup_event():
     """应用启动时初始化 S3 连接和加载数据"""
-    # 检查是否是 S3DataManager（需要动态检查，因为可能延迟导入）
+    # 初始化 data_manager（用于存储实际文件数据）
     if hasattr(data_manager, 'init') and callable(getattr(data_manager, 'init', None)):
         try:
             await data_manager.init()
-            logger.info("S3DataManager initialized successfully")
+            logger.info("✅ DataManager (S3) initialized successfully")
         except AttributeError:
             # 不是 S3DataManager，跳过
             pass
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize DataManager (S3): {e}")
+            raise
+    
+    # 初始化 task_storage_manager（用于存储任务 JSON 数据）
+    if hasattr(task_storage_manager, 'init') and callable(getattr(task_storage_manager, 'init', None)):
+        try:
+            await task_storage_manager.init()
+            logger.info("✅ TaskStorageManager (S3) initialized successfully")
+        except AttributeError:
+            # 不是 S3DataManager，跳过
+            pass
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize TaskStorageManager (S3): {e}")
+            raise
     
     # 如果是 S3 存储，异步加载用户和批次数据
-    if STORAGE_TYPE == "s3":
+    if TASK_STORAGE_TYPE == "s3":
         try:
             await auth_manager.ensure_users_loaded()
         except Exception as e:
@@ -155,14 +254,27 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """应用关闭时清理资源"""
-    # 检查是否是 S3DataManager（需要动态检查）
+    # 关闭 data_manager
     if hasattr(data_manager, 'close') and callable(getattr(data_manager, 'close', None)):
         try:
             await data_manager.close()
-            logger.info("S3DataManager closed")
+            logger.info("✅ DataManager (S3) closed successfully")
         except AttributeError:
             # 不是 S3DataManager，跳过
             pass
+        except Exception as e:
+            logger.error(f"❌ Failed to close DataManager (S3): {e}")
+    
+    # 关闭 task_storage_manager
+    if hasattr(task_storage_manager, 'close') and callable(getattr(task_storage_manager, 'close', None)):
+        try:
+            await task_storage_manager.close()
+            logger.info("✅ TaskStorageManager (S3) closed successfully")
+        except AttributeError:
+            # 不是 S3DataManager，跳过
+            pass
+        except Exception as e:
+            logger.error(f"❌ Failed to close TaskStorageManager (S3): {e}")
 
 # CORS 配置
 app.add_middleware(
@@ -283,7 +395,7 @@ async def change_password(
     """修改当前用户密码"""
     username = user["username"]
     
-    if not auth_manager.change_password(username, old_password, new_password):
+    if not await auth_manager.change_password(username, old_password, new_password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid old password"
@@ -326,7 +438,7 @@ async def create_batch(
             detail="Maximum 50 images allowed"
         )
     
-    # 检查用户点数
+    # 检查用户灵感值
     user_info = auth_manager.get_user_by_id(user["user_id"])
     if not user_info:
         raise HTTPException(
@@ -334,17 +446,23 @@ async def create_batch(
             detail="User not found"
         )
     
-    required_credits = len(images)
-    if user_info["credits"] < required_credits:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Insufficient credits. Required: {required_credits}, Available: {user_info['credits']}"
-        )
-    
-    # 保存音频文件
+    # 保存音频文件并获取音频时长
     audio_data = await audio.read()
     audio_filename = f"{user['user_id']}_{audio.filename}"
     await data_manager.save_audio(audio_data, audio_filename)
+    
+    # 计算音频时长（秒）
+    audio_duration = await get_audio_duration(audio_data)
+    
+    # 计算灵感值：≤30s = 1灵感值/视频，>30s = ceil(时长/30)灵感值/视频
+    credits_per_video = 1 if audio_duration <= 30 else math.ceil(audio_duration / 30)
+    required_credits = credits_per_video * len(images)
+    
+    if user_info["credits"] < required_credits:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Insufficient credits. Required: {required_credits} (audio: {audio_duration:.1f}s, {credits_per_video} credits/video × {len(images)} videos), Available: {user_info['credits']}"
+        )
     
     # 并发保存所有图片文件以提高速度
     async def save_single_image(img: UploadFile) -> str:
@@ -357,18 +475,23 @@ async def create_batch(
     # 使用 asyncio.gather 并发上传所有图片
     image_filenames = await asyncio.gather(*[save_single_image(img) for img in images])
     
-    # 扣除点数
-    auth_manager.deduct_credits(user["user_id"], required_credits)
+    # 扣除灵感值
+    if not await auth_manager.deduct_credits(user["user_id"], required_credits):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Insufficient credits"
+        )
     
-    # 创建批次
+    # 创建批次（记录消耗的积分）
     batch_name = f"批次 {user_info['username']} {asyncio.get_event_loop().time()}"
-    batch = task_manager.create_batch(
+    batch = await task_manager.create_batch(
         user_id=user["user_id"],
         user_name=user_info["username"],
         name=batch_name,
         prompt=prompt,
         audio_filename=audio_filename,
         image_filenames=image_filenames,
+        credits_used=required_credits,  # 记录消耗的灵感值
     )
     
     # 异步处理批次
@@ -627,17 +750,12 @@ async def create_user(
     try:
         # 新用户的初始密码固定为 123456
         default_password = "123456"
-        user_data = auth_manager.create_user(
+        user_data = await auth_manager.create_user(
             username=username,
             password=default_password,
             is_admin=is_admin,
             credits=credits
         )
-        
-        # 如果是 S3 存储，需要异步保存
-        if STORAGE_TYPE == "s3" and auth_manager.data_manager:
-            users_data = json.dumps(auth_manager._users, ensure_ascii=False, indent=2).encode('utf-8')
-            await auth_manager._save_users_async(users_data)
         
         return {
             "success": True,
@@ -661,14 +779,14 @@ async def update_user_credits(
     new_credits: int = Form(...),
     admin: dict = Depends(get_current_admin),
 ):
-    """更新用户点数"""
+    """更新用户灵感值"""
     if new_credits < 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Credits must be non-negative"
         )
     
-    success = auth_manager.update_user_credits(user_id, new_credits)
+    success = await auth_manager.update_user_credits(user_id, new_credits)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

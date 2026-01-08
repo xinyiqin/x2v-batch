@@ -51,7 +51,7 @@ class BatchProcessor:
         
         # 更新批次状态
         batch.status = BatchStatus.PROCESSING
-        self.task_manager._save_batch(batch)
+        await self.task_manager._save_batch(batch)
         
         # 加载音频文件
         audio_data = await self.data_manager.load_bytes(batch.audio_filename, "audios")
@@ -70,7 +70,7 @@ class BatchProcessor:
         batch = self.task_manager.get_batch(batch_id)
         if batch:
             batch.update_status()
-            self.task_manager._save_batch(batch)
+            await self.task_manager._save_batch(batch)
         
         logger.info(f"Batch {batch_id} processing completed")
     
@@ -90,7 +90,7 @@ class BatchProcessor:
         """
         try:
             # 更新状态为处理中，设置估算时间（默认60秒，可根据实际情况调整）
-            self.task_manager.update_video_item(
+            await self.task_manager.update_video_item(
                 batch_id=batch.id,
                 item_id=item.id,
                 status=VideoItemStatus.PROCESSING,
@@ -133,7 +133,7 @@ class BatchProcessor:
                 if not submit_result.get("success"):
                     error_msg = submit_result.get("error", "Unknown error")
                     logger.error(f"Failed to submit task for item {item.id}: {error_msg}")
-                    self.task_manager.update_video_item(
+                    await self.task_manager.update_video_item(
                         batch_id=batch.id,
                         item_id=item.id,
                         status=VideoItemStatus.FAILED,
@@ -142,7 +142,7 @@ class BatchProcessor:
                     return
                 
                 api_task_id = submit_result["task_id"]
-                self.task_manager.update_video_item(
+                await self.task_manager.update_video_item(
                     batch_id=batch.id,
                     item_id=item.id,
                     api_task_id=api_task_id,
@@ -158,7 +158,7 @@ class BatchProcessor:
                 if not final_result.get("success"):
                     error_msg = final_result.get("error", "Unknown error")
                     logger.error(f"Task failed for item {item.id}: {error_msg}")
-                    self.task_manager.update_video_item(
+                    await self.task_manager.update_video_item(
                         batch_id=batch.id,
                         item_id=item.id,
                         status=VideoItemStatus.FAILED,
@@ -173,7 +173,7 @@ class BatchProcessor:
                     
                     if result_url:
                         # 保存视频 URL
-                        self.task_manager.update_video_item(
+                        await self.task_manager.update_video_item(
                             batch_id=batch.id,
                             item_id=item.id,
                             status=VideoItemStatus.COMPLETED,
@@ -182,7 +182,7 @@ class BatchProcessor:
                         logger.info(f"Item {item.id} completed, video URL: {result_url}")
                     else:
                         logger.warning(f"Item {item.id} succeeded but no result URL")
-                        self.task_manager.update_video_item(
+                        await self.task_manager.update_video_item(
                             batch_id=batch.id,
                             item_id=item.id,
                             status=VideoItemStatus.FAILED,
@@ -191,7 +191,7 @@ class BatchProcessor:
                 else:
                     error_msg = f"Task status: {status}"
                     logger.error(f"Task failed for item {item.id}: {error_msg}")
-                    self.task_manager.update_video_item(
+                    await self.task_manager.update_video_item(
                         batch_id=batch.id,
                         item_id=item.id,
                         status=VideoItemStatus.FAILED,
@@ -210,7 +210,7 @@ class BatchProcessor:
         
         except Exception as e:
             logger.exception(f"Error processing item {item.id}: {e}")
-            self.task_manager.update_video_item(
+            await self.task_manager.update_video_item(
                 batch_id=batch.id,
                 item_id=item.id,
                 status=VideoItemStatus.FAILED,

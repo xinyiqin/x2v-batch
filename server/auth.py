@@ -48,10 +48,11 @@ class AuthManager:
             # 如果本地已有用户数据（包括 admin），则不会创建
             if not self._users:
                 logger.info("No users found in local storage, creating default admin user")
-                self.create_user("admin", self.admin_password, is_admin=True, credits=9999)
+                # 本地存储，使用同步创建和保存
+                self._create_user_sync("admin", self.admin_password, is_admin=True, credits=9999)
             elif "admin" not in self._users:
                 logger.info("Users exist but no admin found, creating admin user")
-                self.create_user("admin", self.admin_password, is_admin=True, credits=9999)
+                self._create_user_sync("admin", self.admin_password, is_admin=True, credits=9999)
             else:
                 logger.info(f"Using existing users from local storage (including admin)")
             logger.info(f"AuthManager initialized with {len(self._users)} users (storage: local)")
@@ -86,17 +87,11 @@ class AuthManager:
         # 如果 S3 上已有用户数据（包括 admin），则不会创建
         if not self._users:
             logger.info("No users found, creating default admin user")
-            self.create_user("admin", self.admin_password, is_admin=True, credits=9999)
-            # 保存到 S3
-            if self.data_manager:
-                await self._save_users_async(json.dumps(self._users, ensure_ascii=False, indent=2).encode('utf-8'))
+            await self.create_user("admin", self.admin_password, is_admin=True, credits=9999)
         elif "admin" not in self._users:
             # 如果有其他用户但没有 admin，创建 admin
             logger.info("Users exist but no admin found, creating admin user")
-            self.create_user("admin", self.admin_password, is_admin=True, credits=9999)
-            # 保存到 S3
-            if self.data_manager:
-                await self._save_users_async(json.dumps(self._users, ensure_ascii=False, indent=2).encode('utf-8'))
+            await self.create_user("admin", self.admin_password, is_admin=True, credits=9999)
         else:
             logger.info(f"Using existing users from storage (including admin)")
         
@@ -205,15 +200,9 @@ class AuthManager:
         """哈希密码"""
         return hashlib.sha256(password.encode()).hexdigest()
     
-    def create_user(
-        self,
-        username: str,
-        password: str,
-        is_admin: bool = False,
-        credits: int = 100,
-    ) -> Dict[str, Any]:
+    def _create_user_sync(self, username: str, password: str, is_admin: bool = False, credits: int = 100) -> Dict[str, Any]:
         """
-        创建用户
+        创建用户（同步版本，用于初始化）
         
         Returns:
             用户信息字典
@@ -232,7 +221,41 @@ class AuthManager:
         }
         
         self._users[username] = user_data
+        # 同步保存（仅用于本地存储的初始化）
         self._save_users()
+        
+        logger.info(f"Created user: {username}")
+        return user_data
+    
+    async def create_user(
+        self,
+        username: str,
+        password: str,
+        is_admin: bool = False,
+        credits: int = 100,
+    ) -> Dict[str, Any]:
+        """
+        创建用户（异步）
+        
+        Returns:
+            用户信息字典
+        """
+        if username in self._users:
+            raise ValueError(f"User {username} already exists")
+        
+        user_id = f"u-{len(self._users) + 1}"
+        user_data = {
+            "id": user_id,
+            "username": username,
+            "password_hash": self._hash_password(password),
+            "credits": credits,
+            "is_admin": is_admin,
+            "created_at": datetime.now().isoformat(),
+        }
+        
+        self._users[username] = user_data
+        # 保存用户数据（支持本地和 S3 存储）
+        await self._save_users_async_wrapper()
         
         logger.info(f"Created user: {username}")
         return user_data
@@ -283,27 +306,46 @@ class AuthManager:
                 }
         return None
     
-    def update_user_credits(self, user_id: str, new_credits: int) -> bool:
-        """更新用户点数"""
+    async def update_user_credits(self, user_id: str, new_credits: int) -> bool:
+        """更新用户灵感值（异步）"""
         for user in self._users.values():
             if user["id"] == user_id:
                 user["credits"] = new_credits
-                self._save_users()
+                # 保存用户数据（支持本地和 S3 存储）
+                await self._save_users_async_wrapper()
                 logger.info(f"Updated credits for user {user_id}: {new_credits}")
                 return True
         return False
     
-    def deduct_credits(self, user_id: str, amount: int) -> bool:
-        """扣除用户点数"""
+    async def deduct_credits(self, user_id: str, amount: int) -> bool:
+        """扣除用户灵感值（异步）"""
         for user in self._users.values():
             if user["id"] == user_id:
                 if user["credits"] < amount:
                     return False
                 user["credits"] -= amount
-                self._save_users()
+                # 保存用户数据（支持本地和 S3 存储）
+                await self._save_users_async_wrapper()
                 logger.info(f"Deducted {amount} credits from user {user_id}, remaining: {user['credits']}")
                 return True
         return False
+    
+    async def _save_users_async_wrapper(self):
+        """异步保存用户数据的包装方法"""
+        # 检查是否是 S3DataManager
+        is_s3_storage = self.data_manager and hasattr(self.data_manager, 'init') and callable(getattr(self.data_manager, 'init', None))
+        
+        if is_s3_storage:
+            # S3 存储，使用异步保存
+            users_data = json.dumps(self._users, ensure_ascii=False, indent=2).encode('utf-8')
+            await self._save_users_async(users_data)
+        else:
+            # 本地存储，使用同步保存（在异步上下文中使用 to_thread）
+            import asyncio
+            def write_file():
+                with open(self.storage_file, "w", encoding="utf-8") as f:
+                    json.dump(self._users, f, ensure_ascii=False, indent=2)
+            await asyncio.to_thread(write_file)
     
     def get_all_users(self) -> list:
         """获取所有用户信息"""
@@ -344,9 +386,9 @@ class AuthManager:
             logger.warning(f"Invalid token: {e}")
             return None
     
-    def change_password(self, username: str, old_password: str, new_password: str) -> bool:
+    async def change_password(self, username: str, old_password: str, new_password: str) -> bool:
         """
-        修改用户密码
+        修改用户密码（异步）
         
         Args:
             username: 用户名
@@ -364,7 +406,8 @@ class AuthManager:
         
         # 更新密码
         self._users[username]["password_hash"] = self._hash_password(new_password)
-        self._save_users()
+        # 保存用户数据（支持本地和 S3 存储）
+        await self._save_users_async_wrapper()
         
         logger.info(f"Password changed for user: {username}")
         return True

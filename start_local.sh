@@ -78,6 +78,27 @@ if ! check_port 3000; then
     exit 1
 fi
 
+# 加载 .env 文件（如果存在）
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    echo -e "${GREEN}📄 加载 .env 文件...${NC}"
+    # 读取 .env 文件，忽略注释和空行，并导出变量
+    set -a
+    while IFS= read -r line || [ -n "$line" ]; do
+        # 跳过注释和空行
+        if [[ "$line" =~ ^[[:space:]]*# ]] || [[ -z "${line// }" ]]; then
+            continue
+        fi
+        # 导出变量（如果包含 =）
+        if [[ "$line" =~ = ]]; then
+            export "$line" 2>/dev/null || true
+        fi
+    done < "$SCRIPT_DIR/.env"
+    set +a
+    echo -e "${GREEN}✅ .env 文件已加载${NC}"
+else
+    echo -e "${YELLOW}⚠️  .env 文件不存在，使用环境变量或默认值${NC}"
+fi
+
 # 设置环境变量（如果未设置）
 if [ -z "$STORAGE_TYPE" ]; then
     export STORAGE_TYPE="local"
@@ -89,6 +110,19 @@ if [ "$STORAGE_TYPE" = "s3" ] && [ -z "$S3_CONFIG" ]; then
     echo -e "${YELLOW}⚠️  警告: STORAGE_TYPE=s3 但 S3_CONFIG 未设置${NC}"
     echo "   将回退到本地存储"
     export STORAGE_TYPE="local"
+fi
+
+# 检查 TASK_STORAGE_TYPE
+if [ -z "$TASK_STORAGE_TYPE" ]; then
+    export TASK_STORAGE_TYPE="local"
+    echo -e "${YELLOW}⚠️  TASK_STORAGE_TYPE 未设置，使用默认值: local${NC}"
+fi
+
+# 如果使用 S3 任务存储，检查 TASK_S3_CONFIG
+if [ "$TASK_STORAGE_TYPE" = "s3" ] && [ -z "$TASK_S3_CONFIG" ] && [ -z "$S3_CONFIG" ]; then
+    echo -e "${YELLOW}⚠️  警告: TASK_STORAGE_TYPE=s3 但 TASK_S3_CONFIG 和 S3_CONFIG 都未设置${NC}"
+    echo "   将回退到本地存储"
+    export TASK_STORAGE_TYPE="local"
 fi
 
 # 设置默认环境变量

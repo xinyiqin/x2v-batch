@@ -30,6 +30,7 @@ export interface Batch {
   imageCount: number;
   items: VideoItem[];
   progress?: BatchProgress;  // 批次进度信息
+  creditsUsed?: number;  // 批次消耗的积分
 }
 
 export type ViewState = 'create' | 'gallery' | 'admin';

@@ -57,16 +57,38 @@ class S3DataManager:
         self.session = None
         self.s3_client = None
         self._initialized = False
+        # 存储每个事件循环的客户端，避免事件循环冲突
+        self._loop_clients = {}
         
         logger.info(f"S3DataManager initialized with bucket: {self.bucket_name}, base_path: {self.base_path}")
     
     async def init(self):
         """初始化 S3 客户端并检查存储桶"""
+        # 获取当前事件循环
+        loop = asyncio.get_event_loop()
+        
+        # 如果当前事件循环已经有客户端，直接返回
+        if loop in self._loop_clients:
+            self.s3_client = self._loop_clients[loop]
+            self._initialized = True
+            return
+        
+        if self._initialized:
+            # 检查当前事件循环是否与已初始化的客户端匹配
+            if self.s3_client and hasattr(self.s3_client, '_client_config'):
+                # 如果客户端存在但事件循环不匹配，需要重新创建
+                try:
+                    # 尝试使用现有客户端，如果失败则重新创建
+                    pass
+                except RuntimeError:
+                    self._initialized = False
+                    self.s3_client = None
+        
         if self._initialized:
             return
         
         try:
-            logger.info(f"Initializing S3 client for bucket: {self.bucket_name}")
+            logger.info(f"Initializing S3 client for bucket: {self.bucket_name} (loop: {id(loop)})")
             
             s3_config = {"payload_signing_enabled": True}
             # 火山引擎 TOS 需要 addressing_style
@@ -74,8 +96,9 @@ class S3DataManager:
                 s3_config["addressing_style"] = self.addressing_style
                 logger.debug(f"Using addressing_style: {self.addressing_style}")
             
-            self.session = aioboto3.Session()
-            self.s3_client = await self.session.client(
+            # 为当前事件循环创建新的会话和客户端
+            session = aioboto3.Session()
+            s3_client = await session.client(
                 "s3",
                 aws_access_key_id=self.aws_access_key_id,
                 aws_secret_access_key=self.aws_secret_access_key,
@@ -90,6 +113,11 @@ class S3DataManager:
                     max_pool_connections=50,
                 ),
             ).__aenter__()
+            
+            # 存储会话和客户端
+            self.session = session
+            self.s3_client = s3_client
+            self._loop_clients[loop] = s3_client
             
             # 检查存储桶是否存在，不存在则创建
             try:
@@ -119,13 +147,28 @@ class S3DataManager:
     
     async def close(self):
         """关闭 S3 客户端"""
+        # 关闭所有事件循环的客户端
+        for loop, client in list(self._loop_clients.items()):
+            try:
+                await client.__aexit__(None, None, None)
+                logger.debug(f"Closed S3 client for loop: {id(loop)}")
+            except Exception as e:
+                logger.warning(f"Error closing S3 client for loop {id(loop)}: {e}")
+            finally:
+                del self._loop_clients[loop]
+        
+        # 关闭主客户端（如果存在）
         if self.s3_client:
             try:
                 await self.s3_client.__aexit__(None, None, None)
+                logger.info("S3 client closed")
             except Exception as e:
                 logger.warning(f"Error closing S3 client: {e}")
+        
         self.session = None
+        self.s3_client = None
         self._initialized = False
+        self._loop_clients.clear()
     
     def _get_key(self, filename: str, subdir: Optional[str] = None) -> str:
         """获取 S3 对象键（路径）"""
@@ -174,9 +217,22 @@ class S3DataManager:
         
         content_sha256 = hashlib.sha256(bytes_data).hexdigest()
         
+        # 获取当前事件循环
+        loop = asyncio.get_event_loop()
+        
+        # 确保当前事件循环有客户端
+        if loop not in self._loop_clients:
+            await self.init()
+        
+        # 使用当前事件循环的客户端
+        s3_client = self._loop_clients.get(loop, self.s3_client)
+        if not s3_client:
+            await self.init()
+            s3_client = self._loop_clients.get(loop, self.s3_client)
+        
         try:
             logger.debug(f"Attempting to save bytes to S3: bucket={self.bucket_name}, key={key}, size={len(bytes_data)}")
-            await self.s3_client.put_object(
+            await s3_client.put_object(
                 Bucket=self.bucket_name,
                 Key=key,
                 Body=bytes_data,

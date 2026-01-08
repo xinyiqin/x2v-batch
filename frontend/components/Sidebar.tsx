@@ -178,7 +178,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   >
                     <span className="font-medium truncate">{batch.name}</span>
                     <span className="text-[11px] opacity-70">
-                      {new Date(batch.timestamp).toLocaleDateString()} • {batch.imageCount}
+                      {new Date(batch.timestamp).toLocaleDateString()} • {batch.imageCount} {t.videos || 'videos'}
+                      {batch.creditsUsed !== undefined && batch.creditsUsed > 0 && (
+                        <> • {batch.creditsUsed} {t.credits}</>
+                      )}
                     </span>
                   </button>
                 ))

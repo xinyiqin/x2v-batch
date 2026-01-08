@@ -163,6 +163,7 @@ class Batch:
         image_count: int,
         items: Optional[List[VideoItem]] = None,
         status: BatchStatus = BatchStatus.CREATED,
+        credits_used: int = 0,
     ):
         self.id = batch_id
         self.user_id = user_id
@@ -173,6 +174,7 @@ class Batch:
         self.image_count = image_count
         self.items = items or []
         self.status = status
+        self.credits_used = credits_used  # 批次消耗的灵感值
         self.created_at = datetime.now()
         self.updated_at = datetime.now()
     
@@ -236,6 +238,7 @@ class Batch:
             "status": self.status.value,
             "progress": progress_info,
             "items": [item.to_dict() for item in self.items],
+            "creditsUsed": self.credits_used,  # 批次消耗的灵感值
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
@@ -252,6 +255,7 @@ class Batch:
             audio_filename=data["audioName"],
             image_count=data["imageCount"],
             status=BatchStatus(data.get("status", "created")),
+            credits_used=data.get("creditsUsed", 0),  # 兼容旧数据，默认为0
         )
         if "items" in data:
             batch.items = []
@@ -308,16 +312,20 @@ class Batch:
 class TaskManager:
     """任务管理器"""
     
-    def __init__(self, storage_dir: str = "./data/batches", data_manager=None):
+    def __init__(self, storage_dir: str = "./data/batches", task_storage_manager=None, data_manager=None):
         """
         初始化任务管理器
         
         Args:
-            storage_dir: 批次数据存储目录（当不使用 data_manager 时）
-            data_manager: 数据管理器（可选，如果提供则使用它存储 JSON）
+            storage_dir: 批次数据存储目录（当不使用 task_storage_manager 时）
+            task_storage_manager: 任务存储管理器（可选，用于存储批次 JSON 文件，独立于 data_manager）
+            data_manager: 数据管理器（可选，用于存储实际文件数据，如图片、音频、视频等）
         """
         self.storage_dir = Path(storage_dir)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
+        # task_storage_manager 用于存储任务相关的 JSON 数据（batches/*.json）
+        self.task_storage_manager = task_storage_manager
+        # data_manager 用于存储实际文件数据（图片、音频、视频等）
         self.data_manager = data_manager
         self._batches_loaded = False
         
@@ -326,22 +334,22 @@ class TaskManager:
         
         # 加载已存在的批次（如果是本地存储，立即加载；如果是 S3，延迟到异步上下文）
         # 检查是否是 S3DataManager（通过检查是否有 init 方法来判断）
-        is_s3_storage = self.data_manager and hasattr(self.data_manager, 'init') and callable(getattr(self.data_manager, 'init', None))
+        is_s3_storage = self.task_storage_manager and hasattr(self.task_storage_manager, 'init') and callable(getattr(self.task_storage_manager, 'init', None))
         
         if not is_s3_storage:
             # 本地存储，可以同步加载
             self._load_batches()
-            logger.info(f"TaskManager initialized with {len(self._batches)} batches (storage: local)")
+            logger.info(f"TaskManager initialized with {len(self._batches)} batches (task storage: local)")
         else:
             # S3 存储，延迟加载
-            logger.info("TaskManager initialized (storage: S3, will load batches asynchronously)")
+            logger.info("TaskManager initialized (task storage: S3, will load batches asynchronously)")
     
     async def ensure_batches_loaded(self):
         """确保批次数据已加载（用于 S3 存储的异步加载）"""
         if self._batches_loaded:
             return
         
-        if self.data_manager:
+        if self.task_storage_manager:
             # 异步加载批次数据
             try:
                 files = await self._load_batches_async()
@@ -365,7 +373,7 @@ class TaskManager:
                 logger.error(f"Failed to load batches from S3: {e}")
         
         self._batches_loaded = True
-        logger.info(f"TaskManager loaded {len(self._batches)} batches (storage: S3)")
+        logger.info(f"TaskManager loaded {len(self._batches)} batches (task storage: S3)")
     
     def _get_batch_file(self, batch_id: str) -> Path:
         """获取批次文件路径"""
@@ -374,7 +382,7 @@ class TaskManager:
     def _load_batches(self):
         """从存储加载所有批次（支持本地文件或 S3）"""
         # 检查是否是 S3DataManager
-        is_s3_storage = self.data_manager and hasattr(self.data_manager, 'init') and callable(getattr(self.data_manager, 'init', None))
+        is_s3_storage = self.task_storage_manager and hasattr(self.task_storage_manager, 'init') and callable(getattr(self.task_storage_manager, 'init', None))
         
         if is_s3_storage:
             # 使用 S3DataManager（异步）
@@ -469,7 +477,7 @@ class TaskManager:
     async def _load_batches_async(self) -> List[str]:
         """异步列出所有批次文件"""
         try:
-            return await self.data_manager.list_files("batches")
+            return await self.task_storage_manager.list_files("batches")
         except Exception as e:
             logger.error(f"Failed to list batches from S3: {e}")
             return []
@@ -478,66 +486,38 @@ class TaskManager:
         """异步加载单个批次"""
         try:
             filename = f"{batch_id}.json"
-            return await self.data_manager.load_bytes(filename, "batches")
+            return await self.task_storage_manager.load_bytes(filename, "batches")
         except Exception as e:
             logger.error(f"Failed to load batch {batch_id} from S3: {e}")
             return None
     
-    def _save_batch(self, batch: Batch):
-        """保存批次到存储（支持本地文件或 S3）"""
+    async def _save_batch(self, batch: Batch):
+        """保存批次到存储（支持本地文件或 S3）- 异步版本"""
         # 检查是否是 S3DataManager
-        is_s3_storage = self.data_manager and hasattr(self.data_manager, 'init') and callable(getattr(self.data_manager, 'init', None))
+        is_s3_storage = self.task_storage_manager and hasattr(self.task_storage_manager, 'init') and callable(getattr(self.task_storage_manager, 'init', None))
         
         if is_s3_storage:
             # 使用 S3DataManager（异步）
             try:
                 data = json.dumps(batch.to_dict(), ensure_ascii=False, indent=2).encode('utf-8')
                 filename = f"{batch.id}.json"
-                # 为每个线程创建独立的事件循环，避免事件循环关闭问题
-                def run_async():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    try:
-                        result = loop.run_until_complete(self._save_batch_async(filename, data))
-                        # 确保所有任务都完成
-                        pending = asyncio.all_tasks(loop)
-                        if pending:
-                            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                        return result
-                    finally:
-                        # 确保所有任务完成后再关闭
-                        try:
-                            pending = asyncio.all_tasks(loop)
-                            if pending:
-                                for task in pending:
-                                    task.cancel()
-                                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                        except Exception:
-                            pass
-                        finally:
-                            loop.close()
-                
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(run_async)
-                    future.result()
+                await self.task_storage_manager.save_bytes(data, filename, "batches")
             except Exception as e:
-                logger.error(f"Failed to save batch to data_manager: {e}")
+                logger.error(f"Failed to save batch to task_storage_manager: {e}")
+                import traceback
+                logger.debug(f"Traceback: {traceback.format_exc()}")
+                raise
         else:
-            # 使用本地文件
+            # 使用本地文件（同步操作，但在异步上下文中执行）
             batch_file = self._get_batch_file(batch.id)
-            with open(batch_file, "w", encoding="utf-8") as f:
-                json.dump(batch.to_dict(), f, ensure_ascii=False, indent=2)
+            # 使用 asyncio.to_thread 在后台线程中执行文件 I/O
+            import asyncio
+            def write_file():
+                with open(batch_file, "w", encoding="utf-8") as f:
+                    json.dump(batch.to_dict(), f, ensure_ascii=False, indent=2)
+            await asyncio.to_thread(write_file)
     
-    async def _save_batch_async(self, filename: str, data: bytes):
-        """异步保存批次"""
-        try:
-            await self.data_manager.save_bytes(data, filename, "batches")
-        except Exception as e:
-            logger.error(f"Failed to save batch to S3: {e}")
-            raise
-    
-    def create_batch(
+    async def create_batch(
         self,
         user_id: str,
         user_name: str,
@@ -545,9 +525,10 @@ class TaskManager:
         prompt: str,
         audio_filename: str,
         image_filenames: List[str],
+        credits_used: int = 0,
     ) -> Batch:
         """
-        创建新批次
+        创建新批次（异步）
         
         Args:
             user_id: 用户ID
@@ -556,6 +537,7 @@ class TaskManager:
             prompt: 提示词
             audio_filename: 音频文件名
             image_filenames: 图片文件名列表
+            credits_used: 批次消耗的灵感值
             
         Returns:
             创建的批次对象
@@ -582,12 +564,13 @@ class TaskManager:
             image_count=len(image_filenames),
             items=items,
             status=BatchStatus.CREATED,
+            credits_used=credits_used,
         )
         
         self._batches[batch.id] = batch
-        self._save_batch(batch)
+        await self._save_batch(batch)
         
-        logger.info(f"Created batch {batch_id} with {len(items)} items")
+        logger.info(f"Created batch {batch_id} with {len(items)} items, credits used: {credits_used}")
         return batch
     
     def get_batch(self, batch_id: str) -> Optional[Batch]:
@@ -610,7 +593,7 @@ class TaskManager:
         all_batches.sort(key=lambda b: b.created_at, reverse=True)
         return all_batches[offset:offset + limit]
     
-    def update_video_item(
+    async def update_video_item(
         self,
         batch_id: str,
         item_id: str,
@@ -622,7 +605,7 @@ class TaskManager:
         estimated_duration: Optional[int] = None,
     ) -> bool:
         """
-        更新视频子项
+        更新视频子项（异步）
         
         Returns:
             是否成功
@@ -660,7 +643,7 @@ class TaskManager:
         
         item.updated_at = datetime.now()
         batch.update_status()
-        self._save_batch(batch)
+        await self._save_batch(batch)
         
         return True
     
