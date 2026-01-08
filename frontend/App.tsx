@@ -331,7 +331,7 @@ const App: React.FC = () => {
                  users={allUsers.length > 0 ? allUsers : []} 
                  batches={batches.length > 0 ? batches : []} 
                  lang={lang} 
-                 onUpdateUserCredits={handleUpdateUserCredits}
+                 onUpdateUserCredits={handleUpdateUserCredits} 
                  onCreateUser={async () => {
                    // 刷新用户列表
                    await loadAllUsers();

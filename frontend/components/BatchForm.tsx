@@ -250,7 +250,7 @@ export const BatchForm: React.FC<BatchFormProps> = ({ onCreated, lang, userCredi
       <div className="pt-4 space-y-3">
         {images.length > 0 && (
           <div className="space-y-2">
-            <div className="flex justify-between text-xs font-mono">
+          <div className="flex justify-between text-xs font-mono">
               <span className="text-gray-500">
                 {t.costInfo.replace('{count}', totalCredits.toString())}
                 {audioDuration && (
@@ -259,9 +259,9 @@ export const BatchForm: React.FC<BatchFormProps> = ({ onCreated, lang, userCredi
                   </span>
                 )}
               </span>
-              <span className={canAfford ? 'text-green-500' : 'text-red-500'}>
-                {canAfford ? '✔' : t.insufficientCredits}
-              </span>
+            <span className={canAfford ? 'text-green-500' : 'text-red-500'}>
+              {canAfford ? '✔' : t.insufficientCredits}
+            </span>
             </div>
             {audioDuration && (
               <div className="text-xs text-gray-400">
