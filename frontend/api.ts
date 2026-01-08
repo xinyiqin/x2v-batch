@@ -338,6 +338,43 @@ export async function updateUserCredits(userId: string, newCredits: number): Pro
   await response.json();
 }
 
+export interface UpdateTokenResponse {
+  success: boolean;
+  message: string;
+  warning?: string;
+}
+
+export async function updateS2VToken(newToken: string): Promise<UpdateTokenResponse> {
+  const formData = new FormData();
+  formData.append('new_token', newToken);
+  
+  const token = getToken();
+  const headers: HeadersInit = {};
+
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`${API_BASE}/api/admin/token`, {
+    method: 'PATCH',
+    headers,
+    body: formData,
+  });
+
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+    throw new Error('Unauthorized');
+  }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Failed to update token' }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
 export interface GetAllBatchesResponse {
   batches: Batch[];
   total: number;
@@ -392,48 +429,114 @@ export async function exportBatchVideos(batchId: string): Promise<Blob> {
     throw new Error('Not authenticated');
   }
 
-  const response = await fetch(`${API_BASE}/api/video/batches/${batchId}/export`, {
-    method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-    },
-  });
+  console.log(`[Export] Starting export for batch: ${batchId}`);
+  
+  // 创建一个 AbortController 用于超时控制（10分钟超时）
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, 10 * 60 * 1000); // 10分钟超时
+  
+  try {
+    const response = await fetch(`${API_BASE}/api/video/batches/${batchId}/export`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      signal: controller.signal,
+    });
 
-  if (response.status === 401) {
-    clearToken();
-    window.location.reload();
-    throw new Error('Unauthorized');
-  }
+    console.log(`[Export] Response status: ${response.status}, headers:`, {
+      'content-type': response.headers.get('content-type'),
+      'content-length': response.headers.get('content-length'),
+      'content-disposition': response.headers.get('content-disposition'),
+    });
 
-  if (!response.ok) {
-    // 尝试解析错误响应
-    let errorMessage = `HTTP ${response.status}`;
-    try {
-      const contentType = response.headers.get('content-type');
-      if (contentType && contentType.includes('application/json')) {
-        const error = await response.json();
-        errorMessage = error.detail || error.message || errorMessage;
-      } else {
-        const text = await response.text();
-        if (text) {
-          errorMessage = text.substring(0, 200);
-        }
-      }
-    } catch (e) {
-      // 如果解析失败，使用默认错误信息
+    if (response.status === 401) {
+      clearTimeout(timeoutId);
+      clearToken();
+      window.location.reload();
+      throw new Error('Unauthorized');
     }
-    throw new Error(errorMessage);
-  }
 
-  // 检查响应类型
-  const contentType = response.headers.get('content-type');
-  if (contentType && contentType.includes('application/zip')) {
-    // 正常情况：返回 zip 文件
-    return await response.blob();
-  } else {
-    // 如果不是 zip 文件，可能是错误响应
-    const text = await response.text();
-    throw new Error(`Unexpected response type: ${contentType}. Response: ${text.substring(0, 200)}`);
+    if (!response.ok) {
+      clearTimeout(timeoutId);
+      // 尝试解析错误响应
+      let errorMessage = `HTTP ${response.status}`;
+      try {
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          const error = await response.json();
+          errorMessage = error.detail || error.message || errorMessage;
+        } else {
+          const text = await response.text();
+          if (text) {
+            errorMessage = text.substring(0, 200);
+          }
+        }
+      } catch (e) {
+        // 如果解析失败，使用默认错误信息
+        console.error('[Export] Failed to parse error response:', e);
+      }
+      throw new Error(errorMessage);
+    }
+
+    // 检查响应类型
+    const contentType = response.headers.get('content-type');
+    console.log(`[Export] Content-Type: ${contentType}`);
+    
+    // 尝试读取 blob，即使 content-type 不完全匹配
+    try {
+      const blob = await response.blob();
+      console.log(`[Export] Blob received, size: ${blob.size} bytes, type: ${blob.type}`);
+      
+      if (blob.size === 0) {
+        clearTimeout(timeoutId);
+        throw new Error('Downloaded file is empty');
+      }
+      
+      // 验证是否是 zip 文件（检查前几个字节）
+      const arrayBuffer = await blob.slice(0, 4).arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
+      // ZIP 文件签名：PK\x03\x04 或 PK\x05\x06
+      const isZip = uint8Array[0] === 0x50 && uint8Array[1] === 0x4B;
+      
+      if (!isZip && !contentType?.includes('application/zip')) {
+        clearTimeout(timeoutId);
+        // 如果不是 zip 文件，尝试读取为文本查看错误信息
+        const text = await blob.text();
+        throw new Error(`Unexpected response type. Response: ${text.substring(0, 200)}`);
+      }
+      
+      clearTimeout(timeoutId);
+      return blob;
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      console.error('[Export] Failed to read blob:', error);
+      
+      // 检查是否是超时错误
+      if (error.name === 'AbortError') {
+        throw new Error('Export timeout: The operation took too long. Please try again or contact support.');
+      }
+      
+      // 如果读取 blob 失败，尝试读取为文本查看错误信息
+      try {
+        const text = await response.text();
+        throw new Error(`Failed to download zip file: ${text.substring(0, 200)}`);
+      } catch (e) {
+        throw error;
+      }
+    }
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    
+    // 检查是否是超时错误
+    if (error.name === 'AbortError') {
+      throw new Error('Export timeout: The operation took too long. Please try again or contact support.');
+    }
+    
+    // 重新抛出其他错误
+    throw error;
   }
 }
 

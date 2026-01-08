@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { User, Batch } from '../types';
 import { translations, Language } from '../translations';
-import { createUser } from '../api';
+import { createUser, updateS2VToken } from '../api';
 
 interface AdminPanelProps {
   users: User[];
@@ -20,6 +20,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ users, batches, onUpdate
   const [newUsername, setNewUsername] = useState('');
   const [newCredits, setNewCredits] = useState(100);
   const [isCreating, setIsCreating] = useState(false);
+  const [showTokenModal, setShowTokenModal] = useState(false);
+  const [newToken, setNewToken] = useState('');
+  const [isUpdatingToken, setIsUpdatingToken] = useState(false);
 
   // 计算非admin用户的任务总数和视频总数
   const nonAdminUserIds = new Set(users.filter(u => !u.isAdmin).map(u => u.id));
@@ -82,19 +85,30 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ users, batches, onUpdate
               </p>
             </div>
           </div>
-          <button
-            onClick={() => setShowCreateUserModal(true)}
-            className="px-6 py-3 text-white font-semibold rounded-2xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center gap-2"
-            style={{ 
-              background: 'linear-gradient(135deg, #90dce1 0%, #6fc4cc 100%)',
-              boxShadow: '0 8px 20px rgba(144, 220, 225, 0.3)'
-            }}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M12 5v14M5 12h14"/>
-            </svg>
-            {t.createUser || 'Create User'}
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowTokenModal(true)}
+              className="px-6 py-3 text-white font-semibold rounded-2xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center gap-2 border border-white/[0.2] bg-white/[0.08] hover:bg-white/[0.12]"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/>
+              </svg>
+              {t.updateToken || 'Update Token'}
+            </button>
+            <button
+              onClick={() => setShowCreateUserModal(true)}
+              className="px-6 py-3 text-white font-semibold rounded-2xl transition-all duration-200 shadow-lg hover:shadow-xl flex items-center gap-2"
+              style={{ 
+                background: 'linear-gradient(135deg, #90dce1 0%, #6fc4cc 100%)',
+                boxShadow: '0 8px 20px rgba(144, 220, 225, 0.3)'
+              }}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+              {t.createUser || 'Create User'}
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -313,6 +327,70 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ users, batches, onUpdate
                   }}
                 >
                   {isCreating ? (t.creating || 'Creating...') : (t.create || 'Create')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Update Token Modal */}
+      {showTokenModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl animate-in fade-in duration-200">
+          <div className="w-full max-w-sm bg-white/[0.05] backdrop-blur-2xl border border-white/[0.1] rounded-3xl p-10 shadow-2xl">
+            <h3 className="text-2xl font-semibold text-white mb-8 tracking-tight">
+              {t.updateTokenTitle || 'Update S2V API Token'}
+            </h3>
+            
+            <div className="space-y-6">
+              <div className="space-y-3">
+                <label className="text-xs text-gray-400 uppercase font-medium tracking-wider">
+                  {t.newTokenLabel || 'New Token'}
+                </label>
+                <textarea 
+                  value={newToken}
+                  onChange={(e) => setNewToken(e.target.value)}
+                  placeholder={t.tokenPlaceholder || 'Enter new access token'}
+                  rows={4}
+                  className="w-full bg-white/[0.08] border border-white/[0.12] rounded-2xl px-5 py-4 text-white placeholder-gray-500 focus:outline-none transition-all duration-200 font-mono text-sm"
+                  style={{ 
+                    '--tw-ring-color': 'rgba(144, 220, 225, 0.5)'
+                  } as React.CSSProperties}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = 'rgba(144, 220, 225, 0.4)';
+                    e.target.style.boxShadow = '0 0 0 3px rgba(144, 220, 225, 0.1)';
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = '';
+                    e.target.style.boxShadow = '';
+                  }}
+                />
+                <p className="text-xs text-gray-500 mt-2">
+                  {t.tokenUpdateInfo || 'The token will be verified after update. If invalid, a warning will be shown.'}
+                </p>
+              </div>
+
+              <div className="flex gap-4 pt-2">
+                <button 
+                  onClick={() => {
+                    setShowTokenModal(false);
+                    setNewToken('');
+                  }}
+                  className="flex-1 py-3.5 bg-white/[0.08] hover:bg-white/[0.12] text-white font-semibold rounded-2xl transition-all duration-200 border border-white/[0.1] hover:border-white/[0.2]"
+                  disabled={isUpdatingToken}
+                >
+                  {t.cancel}
+                </button>
+                <button 
+                  onClick={handleUpdateToken}
+                  disabled={isUpdatingToken || !newToken.trim()}
+                  className="flex-1 py-3.5 text-white font-semibold rounded-2xl transition-all duration-200 shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ 
+                    background: 'linear-gradient(135deg, #90dce1 0%, #6fc4cc 100%)',
+                    boxShadow: '0 8px 20px rgba(144, 220, 225, 0.3)'
+                  }}
+                >
+                  {isUpdatingToken ? (t.updating || 'Updating...') : (t.update || 'Update')}
                 </button>
               </div>
             </div>

@@ -195,18 +195,19 @@ else:
 auth_manager = AuthManager(data_manager=task_storage_manager)
 task_manager = TaskManager(storage_dir=f"{data_dir}/batches", task_storage_manager=task_storage_manager, data_manager=data_manager)
 
-# S2V API 配置
+# S2V API 配置（支持动态更新）
 S2V_BASE_URL = os.getenv("LIGHTX2V_BASE_URL", "https://x2v.light-ai.top")
-S2V_ACCESS_TOKEN = os.getenv("LIGHTX2V_ACCESS_TOKEN", "")
+# 使用可变变量存储 token，允许运行时更新
+_S2V_ACCESS_TOKEN = os.getenv("LIGHTX2V_ACCESS_TOKEN", "")
 
-if not S2V_ACCESS_TOKEN:
+if not _S2V_ACCESS_TOKEN:
     logger.warning("⚠️  LIGHTX2V_ACCESS_TOKEN not set, batch processing will fail")
 
 batch_processor = BatchProcessor(
     task_manager=task_manager,
     data_manager=data_manager,
     base_url=S2V_BASE_URL,
-    access_token=S2V_ACCESS_TOKEN,
+    access_token=_S2V_ACCESS_TOKEN,
 )
 
 # FastAPI 应用
@@ -333,7 +334,10 @@ async def check_token_status():
     """检查 S2V API token 是否有效"""
     import requests
     
-    if not S2V_ACCESS_TOKEN:
+    # 使用 batch_processor 的当前 token
+    current_token = batch_processor.access_token
+    
+    if not current_token:
         return {"valid": False, "error": "Token not configured"}
     
     try:
@@ -341,7 +345,7 @@ async def check_token_status():
         # 使用 /api/v1/model/list 或类似的端点
         url = f"{S2V_BASE_URL}/api/v1/model/list"
         headers = {
-            "Authorization": f"Bearer {S2V_ACCESS_TOKEN}",
+            "Authorization": f"Bearer {current_token}",
             "Content-Type": "application/json"
         }
         
@@ -698,14 +702,18 @@ async def export_batch_videos(
                 except Exception as e:
                     logger.warning(f"Failed to cleanup temp zip file: {e}")
         
+        logger.info(f"Returning zip file: {download_filename}, size: {zip_size} bytes, added_count: {added_count}")
+        
         return StreamingResponse(
             generate(),
             media_type='application/zip',
             headers={
                 'Content-Disposition': f'attachment; filename="{download_filename}"; filename*=UTF-8\'\'{encoded_filename}',
                 'Content-Length': str(zip_size),
+                'Content-Type': 'application/zip',
                 'Cache-Control': 'no-cache',
-                'Accept-Ranges': 'bytes'
+                'Accept-Ranges': 'bytes',
+                'X-Content-Type-Options': 'nosniff'
             }
         )
         
@@ -794,6 +802,57 @@ async def update_user_credits(
         )
     
     return {"success": True, "user_id": user_id, "credits": new_credits}
+
+
+@app.patch("/api/admin/token")
+async def update_s2v_token(
+    new_token: str = Form(...),
+    admin: dict = Depends(get_current_admin),
+):
+    """更新 S2V API token（仅管理员）"""
+    if not new_token or not new_token.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token cannot be empty"
+        )
+    
+    # 更新 batch_processor 的 token
+    batch_processor.update_token(new_token.strip())
+    
+    # 验证新 token 是否有效
+    try:
+        import requests
+        url = f"{S2V_BASE_URL}/api/v1/model/list"
+        headers = {
+            "Authorization": f"Bearer {new_token.strip()}",
+            "Content-Type": "application/json"
+        }
+        response = requests.get(url, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            logger.info(f"Admin {admin['username']} updated S2V token successfully")
+            return {"success": True, "message": "Token updated and verified successfully"}
+        elif response.status_code == 401:
+            logger.warning(f"Admin {admin['username']} updated S2V token, but verification failed (401)")
+            return {
+                "success": True,
+                "message": "Token updated, but verification failed (may be expired)",
+                "warning": "Token may be expired or invalid"
+            }
+        else:
+            logger.warning(f"Admin {admin['username']} updated S2V token, verification returned {response.status_code}")
+            return {
+                "success": True,
+                "message": f"Token updated, but verification returned HTTP {response.status_code}",
+                "warning": "Token verification failed"
+            }
+    except Exception as e:
+        logger.error(f"Failed to verify new token: {e}")
+        return {
+            "success": True,
+            "message": "Token updated, but verification failed",
+            "warning": str(e)
+        }
 
 
 @app.get("/api/admin/batches")

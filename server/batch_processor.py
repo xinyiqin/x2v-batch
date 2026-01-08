@@ -35,6 +35,18 @@ class BatchProcessor:
         self.access_token = access_token
         self.client = S2VClient(base_url=base_url, access_token=access_token)
     
+    def update_token(self, new_token: str):
+        """
+        更新访问令牌
+        
+        Args:
+            new_token: 新的访问令牌
+        """
+        self.access_token = new_token
+        # 重新创建客户端以使用新 token
+        self.client = S2VClient(base_url=self.base_url, access_token=new_token)
+        logger.info("S2V API access token updated successfully")
+    
     async def process_batch(self, batch_id: str):
         """
         处理批次中的所有子任务

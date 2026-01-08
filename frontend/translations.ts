@@ -74,7 +74,15 @@ export const translations = {
     creating: "Creating...",
     totalTasksByNonAdmin: "Total tasks",
     totalVideosByNonAdmin: "Total videos",
-    creditsUsed: "Credits Used"
+    creditsUsed: "Credits Used",
+    updateToken: "Update Token",
+    updateTokenTitle: "Update S2V API Token",
+    newTokenLabel: "New Token",
+    tokenPlaceholder: "Enter new access token",
+    tokenUpdateInfo: "The token will be verified after update. If invalid, a warning will be shown.",
+    tokenRequired: "Token is required",
+    update: "Update",
+    updating: "Updating..."
   },
   zh: {
     brand: "智影 AI",
@@ -150,7 +158,15 @@ export const translations = {
     creating: "创建中...",
     totalTasksByNonAdmin: "用户任务总数",
     totalVideosByNonAdmin: "用户视频总数",
-    creditsUsed: "消耗灵感值"
+    creditsUsed: "消耗灵感值",
+    updateToken: "更新 Token",
+    updateTokenTitle: "更新 S2V API Token",
+    newTokenLabel: "新 Token",
+    tokenPlaceholder: "请输入新的访问令牌",
+    tokenUpdateInfo: "更新后会自动验证 token 有效性，如果无效会显示警告。",
+    tokenRequired: "Token 不能为空",
+    update: "更新",
+    updating: "更新中..."
   }
 };
 
