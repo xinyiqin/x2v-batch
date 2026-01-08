@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Batch, ViewState } from '../types';
 import { translations, Language } from '../translations';
 
@@ -42,6 +42,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const t = translations[lang];
   const [historyExpanded, setHistoryExpanded] = React.useState(false);
+
+  // 注入自定义滚动条样式（仅一次）
+  useEffect(() => {
+    if (typeof document !== 'undefined' && !document.getElementById('sidebar-scrollbar-style')) {
+      const style = document.createElement('style');
+      style.id = 'sidebar-scrollbar-style';
+      style.textContent = `
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: rgba(156, 163, 175, 0.5);
+          border-radius: 3px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: rgba(156, 163, 175, 0.7);
+        }
+      `;
+      document.head.appendChild(style);
+    }
+  }, []);
 
   return (
     <aside className={`
@@ -95,12 +119,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   : (lang === 'zh' ? 'API Token 无效或已过期' : 'API Token Invalid or Expired')
               }
             />
-            <button 
-              onClick={() => setLang(lang === 'zh' ? 'en' : 'zh')}
-              className="text-[11px] font-medium px-3 py-1.5 rounded-lg bg-white/[0.08] hover:bg-white/[0.12] border border-white/[0.1] text-gray-400 hover:text-white transition-all duration-200"
-            >
-              {lang === 'zh' ? 'EN' : '中文'}
-            </button>
+          <button 
+            onClick={() => setLang(lang === 'zh' ? 'en' : 'zh')}
+            className="text-[11px] font-medium px-3 py-1.5 rounded-lg bg-white/[0.08] hover:bg-white/[0.12] border border-white/[0.1] text-gray-400 hover:text-white transition-all duration-200"
+          >
+            {lang === 'zh' ? 'EN' : '中文'}
+          </button>
           </div>
         </div>
 
@@ -158,34 +182,41 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </svg>
           </button>
           <div className={`overflow-hidden transition-all duration-300 md:max-h-[calc(100vh-420px)] ${historyExpanded ? 'max-h-[calc(100vh-420px)]' : 'max-h-0 md:max-h-[calc(100vh-420px)]'}`}>
-            <div className="overflow-y-auto pr-2 -mr-2 space-y-1.5">
-              {batches.length === 0 ? (
-                <p className="px-3 text-sm text-gray-500 italic">{t.noBatches}</p>
-              ) : (
-                batches.map(batch => (
-                  <button
-                    key={batch.id}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onSelectBatch(batch.id);
-                    }}
-                    className={`w-full text-left px-3.5 py-3 rounded-xl text-sm transition-all duration-200 flex flex-col gap-1 ${
-                      selectedId === batch.id 
-                        ? 'bg-[#90dce1]/15 text-[#90dce1] border border-[#90dce1]/25 shadow-sm shadow-[#90dce1]/5' 
-                        : 'text-gray-400 hover:bg-white/[0.06] hover:text-white border border-transparent'
-                    }`}
-                  >
-                    <span className="font-medium truncate">{batch.name}</span>
-                    <span className="text-[11px] opacity-70">
+            <div 
+              className="overflow-y-auto pr-2 -mr-2 space-y-1.5 max-h-[calc(100vh-420px)] custom-scrollbar"
+              style={{
+                scrollbarWidth: 'thin',
+                scrollbarColor: 'rgba(156, 163, 175, 0.5) transparent'
+              }}
+            >
+            {batches.length === 0 ? (
+              <p className="px-3 text-sm text-gray-500 italic">{t.noBatches}</p>
+            ) : (
+              // 按时间戳排序，最新的在最上面（timestamp 越大越新）
+              [...batches].sort((a, b) => b.timestamp - a.timestamp).map(batch => (
+                <button
+                  key={batch.id}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onSelectBatch(batch.id);
+                  }}
+                  className={`w-full text-left px-3.5 py-3 rounded-xl text-sm transition-all duration-200 flex flex-col gap-1 ${
+                    selectedId === batch.id 
+                      ? 'bg-[#90dce1]/15 text-[#90dce1] border border-[#90dce1]/25 shadow-sm shadow-[#90dce1]/5' 
+                      : 'text-gray-400 hover:bg-white/[0.06] hover:text-white border border-transparent'
+                  }`}
+                >
+                  <span className="font-medium truncate">{batch.name}</span>
+                  <span className="text-[11px] opacity-70">
                       {new Date(batch.timestamp).toLocaleDateString()} • {batch.imageCount} {t.videos || 'videos'}
                       {batch.creditsUsed !== undefined && batch.creditsUsed > 0 && (
                         <> • {batch.creditsUsed} {t.credits}</>
                       )}
-                    </span>
-                  </button>
-                ))
-              )}
+                  </span>
+                </button>
+              ))
+            )}
             </div>
           </div>
         </div>
@@ -208,13 +239,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
             </button>
-            <button 
-              onClick={onLogout}
-              className="p-2 text-gray-500 hover:text-red-400 transition-colors rounded-lg hover:bg-white/[0.06]"
-              title={t.logout}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
-            </button>
+          <button 
+            onClick={onLogout}
+            className="p-2 text-gray-500 hover:text-red-400 transition-colors rounded-lg hover:bg-white/[0.06]"
+            title={t.logout}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+          </button>
           </div>
         </div>
       </div>
