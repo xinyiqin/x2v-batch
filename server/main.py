@@ -24,9 +24,15 @@ from server.batch_processor import BatchProcessor
 # 延迟导入 S3DataManager，只在需要时导入
 S3DataManager = None
 
-# 初始化数据目录（首次启动时）
+# 初始化数据目录（仅用于本地存储）
 def init_data_directory():
-    """初始化数据目录和初始数据"""
+    """初始化数据目录和初始数据（仅用于本地存储）"""
+    # 检查存储类型，如果是 S3 则跳过本地目录初始化
+    storage_type = os.getenv("STORAGE_TYPE", "local").lower()
+    if storage_type == "s3":
+        logger.info("Using S3 storage, skipping local data directory initialization")
+        return
+    
     data_dir = os.getenv("DATA_DIR", "./data")
     try:
         # 导入并运行初始化脚本
@@ -44,7 +50,7 @@ def init_data_directory():
         for subdir in ["images", "audios", "videos", "batches"]:
             (base_path / subdir).mkdir(parents=True, exist_ok=True)
         
-        # 初始化 users.json（如果不存在）
+        # 初始化 users.json（如果不存在，仅用于本地存储）
         users_file = base_path / "users.json"
         if not users_file.exists():
             import hashlib
@@ -52,8 +58,11 @@ def init_data_directory():
             def hash_password(password: str) -> str:
                 return hashlib.sha256(password.encode()).hexdigest()
             
-            # 从环境变量获取管理员初始密码
-            admin_password = os.getenv("ADMIN_PASSWORD")
+            # 从环境变量获取管理员初始密码，默认使用 admin8888
+            admin_password = os.getenv("ADMIN_PASSWORD", "admin8888")
+            
+            if not admin_password:
+                admin_password = "admin8888"
             
             default_users = {
                 "admin": {
@@ -67,11 +76,11 @@ def init_data_directory():
             }
             with open(users_file, "w", encoding="utf-8") as f:
                 json.dump(default_users, f, indent=2, ensure_ascii=False)
-            logger.info("✅ Created default users.json with admin and user1")
+            logger.info("✅ Created default users.json with admin user (local storage)")
     except Exception as e:
         logger.warning(f"Failed to initialize data directory: {e}")
 
-# 初始化数据目录
+# 初始化数据目录（仅用于本地存储）
 init_data_directory()
 
 # 初始化组件
