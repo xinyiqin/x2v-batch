@@ -337,13 +337,16 @@ async def create_batch(
     audio_filename = f"{user['user_id']}_{audio.filename}"
     await data_manager.save_audio(audio_data, audio_filename)
     
-    # 保存图片文件
-    image_filenames = []
-    for img in images:
+    # 并发保存所有图片文件以提高速度
+    async def save_single_image(img: UploadFile) -> str:
+        """保存单张图片并返回文件名"""
         img_data = await img.read()
         img_filename = f"{user['user_id']}_{img.filename}"
         await data_manager.save_image(img_data, img_filename)
-        image_filenames.append(img_filename)
+        return img_filename
+    
+    # 使用 asyncio.gather 并发上传所有图片
+    image_filenames = await asyncio.gather(*[save_single_image(img) for img in images])
     
     # 扣除点数
     auth_manager.deduct_credits(user["user_id"], required_credits)
@@ -540,29 +543,37 @@ async def export_batch_videos(
             batch_name_safe = "batch"
         download_filename = f"{batch_name_safe}_{batch_id}.zip"
         
-        # 读取zip文件内容
-        with open(temp_zip_path, 'rb') as f:
-            zip_content = f.read()
-        
-        # 清理临时文件
-        try:
-            os.unlink(temp_zip_path)
-        except Exception as e:
-            logger.warning(f"Failed to cleanup temp zip file: {e}")
-        
-        # 返回zip文件
-        from io import BytesIO
-        from urllib.parse import quote
+        # 获取zip文件大小
+        zip_size = os.path.getsize(temp_zip_path)
         
         # 对文件名进行 URL 编码以支持非 ASCII 字符
+        from urllib.parse import quote
         encoded_filename = quote(download_filename.encode('utf-8'))
         
+        # 创建生成器函数来流式传输文件（分块读取，避免内存问题）
+        def generate():
+            try:
+                with open(temp_zip_path, 'rb') as f:
+                    while True:
+                        chunk = f.read(8192)  # 8KB chunks for better streaming
+                        if not chunk:
+                            break
+                        yield chunk
+            finally:
+                # 清理临时文件
+                try:
+                    os.unlink(temp_zip_path)
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup temp zip file: {e}")
+        
         return StreamingResponse(
-            BytesIO(zip_content),
+            generate(),
             media_type='application/zip',
             headers={
                 'Content-Disposition': f'attachment; filename="{download_filename}"; filename*=UTF-8\'\'{encoded_filename}',
-                'Content-Length': str(len(zip_content))
+                'Content-Length': str(zip_size),
+                'Cache-Control': 'no-cache',
+                'Accept-Ranges': 'bytes'
             }
         )
         

@@ -77,6 +77,11 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
       // 调用后端API获取zip文件
       const zipBlob = await exportBatchVideos(currentBatch.id);
       
+      // 检查 blob 是否有效
+      if (!zipBlob || zipBlob.size === 0) {
+        throw new Error(lang === 'zh' ? '下载的文件为空' : 'Downloaded file is empty');
+      }
+      
       // 创建下载链接
       const url = window.URL.createObjectURL(zipBlob);
       const link = document.createElement('a');

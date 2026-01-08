@@ -406,11 +406,35 @@ export async function exportBatchVideos(batchId: string): Promise<Blob> {
   }
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
+    // 尝试解析错误响应
+    let errorMessage = `HTTP ${response.status}`;
+    try {
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        const error = await response.json();
+        errorMessage = error.detail || error.message || errorMessage;
+      } else {
+        const text = await response.text();
+        if (text) {
+          errorMessage = text.substring(0, 200);
+        }
+      }
+    } catch (e) {
+      // 如果解析失败，使用默认错误信息
+    }
+    throw new Error(errorMessage);
   }
 
-  return await response.blob();
+  // 检查响应类型
+  const contentType = response.headers.get('content-type');
+  if (contentType && contentType.includes('application/zip')) {
+    // 正常情况：返回 zip 文件
+    return await response.blob();
+  } else {
+    // 如果不是 zip 文件，可能是错误响应
+    const text = await response.text();
+    throw new Error(`Unexpected response type: ${contentType}. Response: ${text.substring(0, 200)}`);
+  }
 }
 
 export { clearToken, getToken };

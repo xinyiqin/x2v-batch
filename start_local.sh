@@ -15,6 +15,11 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
+# 注意：S3_CONFIG 应该从环境变量或 .env 文件读取，不要硬编码在脚本中
+# 如果需要使用 S3，请在运行脚本前设置环境变量：
+# export STORAGE_TYPE="s3"
+# export S3_CONFIG='{"aws_access_key_id":"...","aws_secret_access_key":"...",...}'
+
 # 检查 Python
 if ! command -v python3 &> /dev/null; then
     echo -e "${RED}❌ 错误: 未安装 Python3${NC}"
