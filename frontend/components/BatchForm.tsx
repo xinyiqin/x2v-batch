@@ -232,7 +232,7 @@ export const BatchForm: React.FC<BatchFormProps> = ({ onCreated, lang, userCredi
         <button
           type="submit"
           disabled={isGenerating || images.length === 0 || !audio || !canAfford}
-          className="w-full py-4.5 text-white font-semibold rounded-3xl transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-xl hover:shadow-2xl"
+          className="w-full py-6 text-white font-semibold text-lg rounded-3xl transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-3 shadow-xl hover:shadow-2xl"
           style={{ 
             background: (isGenerating || images.length === 0 || !audio || !canAfford)
               ? 'rgba(144, 220, 225, 0.3)'
