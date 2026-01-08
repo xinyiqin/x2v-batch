@@ -36,9 +36,14 @@ class AuthManager:
         
         # 加载用户数据（如果是本地存储，立即加载；如果是 S3，延迟到异步上下文）
         self._users: Dict[str, Dict[str, Any]] = {}
-        if not self.data_manager:
+        # 检查是否是 S3DataManager（通过检查是否有 init 方法来判断）
+        is_s3_storage = self.data_manager and hasattr(self.data_manager, 'init') and callable(getattr(self.data_manager, 'init', None))
+        
+        if not is_s3_storage:
             # 本地存储，可以同步加载
             self._load_users()
+            # 标记用户数据已加载
+            self._users_loaded = True
             # 只有在没有任何用户时才创建默认管理员账户
             # 如果本地已有用户数据（包括 admin），则不会创建
             if not self._users:
@@ -100,8 +105,11 @@ class AuthManager:
     
     def _load_users(self):
         """从存储加载用户数据（支持本地文件或 S3）"""
-        if self.data_manager:
-            # 使用 DataManager（可能是 S3）
+        # 检查是否是 S3DataManager
+        is_s3_storage = self.data_manager and hasattr(self.data_manager, 'init') and callable(getattr(self.data_manager, 'init', None))
+        
+        if is_s3_storage:
+            # 使用 S3DataManager（异步）
             try:
                 # 在同步方法中运行异步函数
                 # 为每个线程创建独立的事件循环，避免事件循环关闭问题
@@ -165,8 +173,11 @@ class AuthManager:
     
     def _save_users(self):
         """保存用户数据到存储（支持本地文件或 S3）"""
-        if self.data_manager:
-            # 使用 DataManager（可能是 S3）- 延迟保存，在异步上下文中执行
+        # 检查是否是 S3DataManager
+        is_s3_storage = self.data_manager and hasattr(self.data_manager, 'init') and callable(getattr(self.data_manager, 'init', None))
+        
+        if is_s3_storage:
+            # 使用 S3DataManager - 延迟保存，在异步上下文中执行
             # 注意：这个方法在同步上下文中调用，但 S3 操作需要异步
             # 我们使用一个简单的同步等待方式，但更好的做法是在异步上下文中调用
             logger.warning("Saving users to S3 from sync context - this should be done in async context")
@@ -228,8 +239,10 @@ class AuthManager:
     
     def verify_password(self, username: str, password: str) -> bool:
         """验证密码"""
+        # 检查是否是 S3DataManager
+        is_s3_storage = self.data_manager and hasattr(self.data_manager, 'init') and callable(getattr(self.data_manager, 'init', None))
         # 如果是 S3 存储且未加载，返回 False（数据应该在 startup 时已加载）
-        if self.data_manager and not self._users_loaded:
+        if is_s3_storage and not self._users_loaded:
             logger.warning("Users not loaded yet, login may fail")
             return False
         user = self._users.get(username)
@@ -241,8 +254,10 @@ class AuthManager:
     
     def get_user(self, username: str) -> Optional[Dict[str, Any]]:
         """获取用户信息（不包含密码）"""
+        # 检查是否是 S3DataManager
+        is_s3_storage = self.data_manager and hasattr(self.data_manager, 'init') and callable(getattr(self.data_manager, 'init', None))
         # 如果是 S3 存储且未加载，返回 None（数据应该在 startup 时已加载）
-        if self.data_manager and not self._users_loaded:
+        if is_s3_storage and not self._users_loaded:
             logger.warning("Users not loaded yet")
             return None
         user = self._users.get(username)

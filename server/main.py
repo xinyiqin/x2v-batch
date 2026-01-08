@@ -4,12 +4,14 @@
 import os
 import asyncio
 import json
+import zipfile
+import tempfile
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 import uvicorn
@@ -205,6 +207,35 @@ async def health_check():
     """健康检查端点"""
     return {"status": "ok", "service": "S2V Batch Service"}
 
+@app.get("/api/token/status")
+async def check_token_status():
+    """检查 S2V API token 是否有效"""
+    import requests
+    
+    if not S2V_ACCESS_TOKEN:
+        return {"valid": False, "error": "Token not configured"}
+    
+    try:
+        # 尝试调用一个简单的 API 端点来验证 token
+        # 使用 /api/v1/model/list 或类似的端点
+        url = f"{S2V_BASE_URL}/api/v1/model/list"
+        headers = {
+            "Authorization": f"Bearer {S2V_ACCESS_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        
+        response = requests.get(url, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            return {"valid": True}
+        elif response.status_code == 401:
+            return {"valid": False, "error": "Unauthorized - token may be expired"}
+        else:
+            return {"valid": False, "error": f"HTTP {response.status_code}"}
+    except requests.exceptions.RequestException as e:
+        logger.warning(f"Failed to check token status: {e}")
+        return {"valid": False, "error": str(e)}
+
 
 # ==================== 认证接口 ====================
 
@@ -383,6 +414,171 @@ async def get_batch(
             item["sourceImage"] = await data_manager.get_url(item["sourceImage"], "images")
     
     return batch_dict
+
+
+@app.get("/api/video/batches/{batch_id}/export")
+async def export_batch_videos(
+    batch_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """导出批次的所有已完成视频为zip文件"""
+    from server.task_manager import VideoItemStatus
+    
+    batch = task_manager.get_batch(batch_id)
+    if not batch:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Batch not found"
+        )
+    
+    # 检查权限
+    if batch.user_id != user["user_id"] and not user.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied"
+        )
+    
+    # 获取所有已完成的视频项（检查 video_url 或 video_filename）
+    completed_items = [
+        item for item in batch.items 
+        if item.status == VideoItemStatus.COMPLETED and (item.video_url or item.video_filename)
+    ]
+    
+    if not completed_items:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No completed videos to export"
+        )
+    
+    # 创建临时zip文件
+    temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+    temp_zip_path = temp_zip.name
+    temp_zip.close()
+    
+    try:
+        import aiohttp
+        
+        # 创建zip文件并添加视频
+        added_count = 0
+        with zipfile.ZipFile(temp_zip_path, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            async with aiohttp.ClientSession() as session:
+                for item in completed_items:
+                    try:
+                        video_data = None
+                        file_ext = '.mp4'
+                        
+                        # 优先使用 video_filename（本地或S3存储）
+                        if item.video_filename:
+                            try:
+                                video_data = await data_manager.load_bytes(item.video_filename, "videos")
+                                file_ext = os.path.splitext(item.video_filename)[1] or '.mp4'
+                                logger.info(f"Loaded video {item.id} from data_manager: {item.video_filename}")
+                            except Exception as e:
+                                logger.warning(f"Failed to load video {item.id} from data_manager: {e}, trying video_url")
+                        
+                        # 如果没有 video_filename 或加载失败，尝试从 video_url 下载
+                        if not video_data and item.video_url:
+                            try:
+                                async with session.get(item.video_url, timeout=aiohttp.ClientTimeout(total=60)) as response:
+                                    if response.status == 200:
+                                        video_data = await response.read()
+                                        # 尝试从 URL 或 Content-Type 获取扩展名
+                                        content_type = response.headers.get('Content-Type', '')
+                                        if 'mp4' in content_type:
+                                            file_ext = '.mp4'
+                                        elif 'webm' in content_type:
+                                            file_ext = '.webm'
+                                        else:
+                                            # 从 URL 提取扩展名
+                                            url_path = item.video_url.split('?')[0]  # 移除查询参数
+                                            url_ext = os.path.splitext(url_path)[1]
+                                            if url_ext:
+                                                file_ext = url_ext
+                                        logger.info(f"Downloaded video {item.id} from URL: {item.video_url}")
+                                    else:
+                                        logger.error(f"Failed to download video {item.id} from URL: HTTP {response.status}")
+                            except Exception as e:
+                                logger.error(f"Failed to download video {item.id} from URL: {e}")
+                        
+                        # 如果成功获取视频数据，添加到zip
+                        if video_data:
+                            zip_filename = f"{item.id}{file_ext}"
+                            # 确保文件名是字符串，并且使用 ZipInfo 来支持 UTF-8 编码
+                            try:
+                                # 尝试直接写入（适用于 ASCII 文件名）
+                                zip_file.writestr(zip_filename, video_data)
+                            except (UnicodeEncodeError, ValueError):
+                                # 如果包含非 ASCII 字符，使用 ZipInfo 并设置 UTF-8 标志
+                                zip_info = zipfile.ZipInfo(zip_filename)
+                                # 设置 UTF-8 标志位（0x800 = UTF-8 encoding flag）
+                                zip_info.flag_bits = 0x800
+                                zip_file.writestr(zip_info, video_data)
+                            added_count += 1
+                            logger.info(f"Added video {item.id} to zip: {zip_filename}")
+                        else:
+                            logger.warning(f"Skipping video {item.id}: no video data available")
+                            
+                    except Exception as e:
+                        logger.error(f"Failed to add video {item.id} to zip: {e}")
+                        # 继续处理其他视频，不中断整个导出过程
+        
+        # 检查是否有视频被成功添加到zip
+        if added_count == 0:
+            # 清理临时文件
+            try:
+                os.unlink(temp_zip_path)
+            except:
+                pass
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No videos could be downloaded or loaded for export"
+            )
+        
+        # 生成下载文件名（确保只包含 ASCII 字符）
+        batch_name_safe = "".join(c for c in batch.name if c.isascii() and (c.isalnum() or c in (' ', '-', '_'))).rstrip()
+        if not batch_name_safe:
+            batch_name_safe = "batch"
+        download_filename = f"{batch_name_safe}_{batch_id}.zip"
+        
+        # 读取zip文件内容
+        with open(temp_zip_path, 'rb') as f:
+            zip_content = f.read()
+        
+        # 清理临时文件
+        try:
+            os.unlink(temp_zip_path)
+        except Exception as e:
+            logger.warning(f"Failed to cleanup temp zip file: {e}")
+        
+        # 返回zip文件
+        from io import BytesIO
+        from urllib.parse import quote
+        
+        # 对文件名进行 URL 编码以支持非 ASCII 字符
+        encoded_filename = quote(download_filename.encode('utf-8'))
+        
+        return StreamingResponse(
+            BytesIO(zip_content),
+            media_type='application/zip',
+            headers={
+                'Content-Disposition': f'attachment; filename="{download_filename}"; filename*=UTF-8\'\'{encoded_filename}',
+                'Content-Length': str(len(zip_content))
+            }
+        )
+        
+    except Exception as e:
+        # 清理临时文件
+        try:
+            if os.path.exists(temp_zip_path):
+                os.unlink(temp_zip_path)
+        except:
+            pass
+        
+        logger.error(f"Failed to create zip file: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create zip file: {str(e)}"
+        )
 
 
 # ==================== 管理员接口 ====================

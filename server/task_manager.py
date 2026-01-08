@@ -325,7 +325,10 @@ class TaskManager:
         self._batches: Dict[str, Batch] = {}
         
         # 加载已存在的批次（如果是本地存储，立即加载；如果是 S3，延迟到异步上下文）
-        if not self.data_manager:
+        # 检查是否是 S3DataManager（通过检查是否有 init 方法来判断）
+        is_s3_storage = self.data_manager and hasattr(self.data_manager, 'init') and callable(getattr(self.data_manager, 'init', None))
+        
+        if not is_s3_storage:
             # 本地存储，可以同步加载
             self._load_batches()
             logger.info(f"TaskManager initialized with {len(self._batches)} batches (storage: local)")
@@ -370,8 +373,11 @@ class TaskManager:
     
     def _load_batches(self):
         """从存储加载所有批次（支持本地文件或 S3）"""
-        if self.data_manager:
-            # 使用 DataManager（可能是 S3）
+        # 检查是否是 S3DataManager
+        is_s3_storage = self.data_manager and hasattr(self.data_manager, 'init') and callable(getattr(self.data_manager, 'init', None))
+        
+        if is_s3_storage:
+            # 使用 S3DataManager（异步）
             try:
                 # 列出所有批次文件
                 # 为每个线程创建独立的事件循环，避免事件循环关闭问题
@@ -449,6 +455,9 @@ class TaskManager:
         else:
             # 使用本地文件
             for batch_file in self.storage_dir.glob("*.json"):
+                # 跳过 users.json（用户数据文件，不是批次文件）
+                if batch_file.name == "users.json":
+                    continue
                 try:
                     with open(batch_file, "r", encoding="utf-8") as f:
                         data = json.load(f)
@@ -476,8 +485,11 @@ class TaskManager:
     
     def _save_batch(self, batch: Batch):
         """保存批次到存储（支持本地文件或 S3）"""
-        if self.data_manager:
-            # 使用 DataManager（可能是 S3）
+        # 检查是否是 S3DataManager
+        is_s3_storage = self.data_manager and hasattr(self.data_manager, 'init') and callable(getattr(self.data_manager, 'init', None))
+        
+        if is_s3_storage:
+            # 使用 S3DataManager（异步）
             try:
                 data = json.dumps(batch.to_dict(), ensure_ascii=False, indent=2).encode('utf-8')
                 filename = f"{batch.id}.json"

@@ -58,48 +58,50 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
     });
   };
 
-  // 导出全部已完成的视频
+  // 导出全部已完成的视频为zip文件
   const handleExportAll = async () => {
     const completedItems = currentBatch.items.filter(
       item => item.status === 'completed' && item.videoUrl && item.videoUrl.trim()
     );
 
     if (completedItems.length === 0) {
-      alert('没有已完成的视频可以导出');
+      alert(lang === 'zh' ? '没有已完成的视频可以导出' : 'No completed videos to export');
       return;
     }
 
     setIsExporting(true);
 
     try {
-      // 逐个下载视频，添加延迟以避免浏览器阻止多个下载
-      // 注意：由于 CORS 限制，我们只能使用直接下载链接
-      // 浏览器可能会阻止多个自动下载，所以需要用户交互或较长的延迟
-      for (let i = 0; i < completedItems.length; i++) {
-        const item = completedItems[i];
-        if (item.videoUrl) {
-          // 第一个立即下载，后续的添加延迟
-          if (i > 0) {
-            // 增加延迟时间，给浏览器更多时间处理前一个下载
-            await new Promise(resolve => setTimeout(resolve, 1500));
-          }
-          
-          try {
-            await handleDownloadVideo(item.videoUrl, item.id);
-          } catch (error) {
-            console.error(`Failed to download video ${item.id}:`, error);
-          }
-        }
-      }
-
-      // 显示完成提示
+      const { exportBatchVideos } = await import('../api');
+      
+      // 调用后端API获取zip文件
+      const zipBlob = await exportBatchVideos(currentBatch.id);
+      
+      // 创建下载链接
+      const url = window.URL.createObjectURL(zipBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // 生成文件名
+      const batchNameSafe = currentBatch.name.replace(/[^a-zA-Z0-9-_ ]/g, '').trim();
+      const timestamp = new Date().toISOString().slice(0, 10);
+      link.download = `${batchNameSafe}_${timestamp}.zip`;
+      
+      // 触发下载
+      document.body.appendChild(link);
+      link.click();
+      
+      // 清理
       setTimeout(() => {
-        alert(`已开始下载 ${completedItems.length} 个视频。如果浏览器阻止了部分下载，请允许下载或逐个点击下载。`);
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
         setIsExporting(false);
-      }, 500);
-    } catch (error) {
+      }, 100);
+      
+    } catch (error: any) {
       console.error('Export failed:', error);
-      alert('导出过程中出现错误');
+      const errorMsg = error?.message || (lang === 'zh' ? '导出过程中出现错误' : 'Export failed');
+      alert(errorMsg);
       setIsExporting(false);
     }
   };
@@ -138,12 +140,12 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
   }, [batch.id, currentBatch.items]);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-4 md:space-y-8">
       {/* Batch Header Info */}
-      <div className="bg-white/[0.04] backdrop-blur-2xl border border-white/[0.08] rounded-3xl p-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 shadow-xl">
-        <div className="flex-1">
-          <h2 className="text-3xl font-semibold text-white mb-4 tracking-tight">{currentBatch.name}</h2>
-          <div className="flex flex-wrap items-center gap-3 mb-4 text-sm">
+      <div className="bg-white/[0.04] backdrop-blur-2xl border border-white/[0.08] rounded-2xl md:rounded-3xl p-4 md:p-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 md:gap-6 shadow-xl">
+        <div className="flex-1 w-full">
+          <h2 className="text-xl md:text-3xl font-semibold text-white mb-3 md:mb-4 tracking-tight">{currentBatch.name}</h2>
+          <div className="flex flex-wrap items-center gap-2 md:gap-3 mb-3 md:mb-4 text-xs md:text-sm">
             <span className="flex items-center gap-2 bg-white/[0.08] px-3 py-1.5 rounded-full text-gray-300 border border-white/[0.1]">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
               {currentBatch.audioName}
@@ -171,7 +173,7 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
                   }}
                 />
               </div>
-              <div className="flex items-center gap-5 text-xs text-gray-400">
+              <div className="flex flex-wrap items-center gap-3 md:gap-5 text-xs text-gray-400">
                 <span>✅ {currentBatch.progress.completed} {t.completed || '已完成'}</span>
                 <span>⏳ {currentBatch.progress.processing} {t.processing || '处理中'}</span>
                 <span>⏸️ {currentBatch.progress.pending} {t.pending || '等待中'}</span>
@@ -191,7 +193,7 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
         <button 
           onClick={handleExportAll}
           disabled={isExporting || currentBatch.items.filter(item => item.status === 'completed' && item.videoUrl).length === 0}
-          className="flex items-center gap-2.5 text-white px-7 py-3.5 rounded-2xl font-medium transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
+          className="w-full md:w-auto flex items-center justify-center gap-2.5 text-white px-5 md:px-7 py-3 md:py-3.5 rounded-xl md:rounded-2xl font-medium transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
           style={{ 
             background: (isExporting || currentBatch.items.filter(item => item.status === 'completed' && item.videoUrl).length === 0) 
               ? 'rgba(144, 220, 225, 0.3)' 
@@ -217,7 +219,7 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
       </div>
 
       {/* Waterfall / Grid Display */}
-      <div className="columns-2 md:columns-3 lg:columns-4 gap-4 space-y-4">
+      <div className="columns-1 sm:columns-2 md:columns-3 lg:columns-4 gap-3 md:gap-4 space-y-3 md:space-y-4">
         {currentBatch.items.map((item) => (
           <div 
             key={item.id} 

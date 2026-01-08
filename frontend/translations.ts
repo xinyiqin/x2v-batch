@@ -67,7 +67,8 @@ export const translations = {
     initialCredits: "Initial Credits",
     defaultPasswordInfo: "Default password: 123456",
     create: "Create",
-    creating: "Creating..."
+    creating: "Creating...",
+    totalTasksByNonAdmin: "Total tasks by non-admin users"
   },
   zh: {
     brand: "智影 AI",
@@ -136,7 +137,8 @@ export const translations = {
     initialCredits: "初始点数",
     defaultPasswordInfo: "初始密码: 123456",
     create: "创建",
-    creating: "创建中..."
+    creating: "创建中...",
+    totalTasksByNonAdmin: "非管理员用户任务总数"
   }
 };
 

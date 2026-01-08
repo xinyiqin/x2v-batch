@@ -30,10 +30,26 @@ export const Login: React.FC<LoginProps> = ({ onLogin, lang }) => {
       const response = await login(username, password);
       onLogin(response.user_info);
     } catch (err: any) {
-      const errorMessage = err.message || 'Login failed';
+      // 提取错误信息，优先使用详细错误，如果没有则使用通用错误
+      let errorMessage = 'Login failed';
+      if (err.message) {
+        errorMessage = err.message;
+      } else if (err.detail) {
+        errorMessage = err.detail;
+      }
+      
+      // 根据语言显示错误信息
+      if (lang === 'zh') {
+        if (errorMessage.includes('Invalid username or password') || errorMessage.includes('401')) {
+          errorMessage = '用户名或密码错误';
+        } else if (errorMessage.includes('User not found')) {
+          errorMessage = '用户不存在';
+        } else if (errorMessage.includes('HTTP')) {
+          errorMessage = '登录失败，请稍后重试';
+        }
+      }
+      
       setError(errorMessage);
-      // 同时显示 alert 弹窗
-      alert(errorMessage);
     } finally {
       setLoading(false);
     }

@@ -96,8 +96,8 @@ export const BatchForm: React.FC<BatchFormProps> = ({ onCreated, lang, userCredi
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <form onSubmit={handleSubmit} className="space-y-4 md:space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
         {/* Image Upload Area */}
         <div className="space-y-3">
           <label className="text-sm font-medium text-gray-300">{t.imagesLabel}</label>
@@ -122,7 +122,7 @@ export const BatchForm: React.FC<BatchFormProps> = ({ onCreated, lang, userCredi
           </div>
           
           {images.length > 0 && (
-            <div className="grid grid-cols-5 gap-2.5 mt-5 max-h-52 overflow-y-auto p-2 bg-white/[0.03] backdrop-blur-sm rounded-2xl border border-white/[0.08]">
+            <div className="grid grid-cols-4 md:grid-cols-5 gap-2 md:gap-2.5 mt-4 md:mt-5 max-h-52 overflow-y-auto p-2 bg-white/[0.03] backdrop-blur-sm rounded-2xl border border-white/[0.08]">
               {images.map((img, i) => (
                 <div key={i} className="relative aspect-square group">
                   <img src={URL.createObjectURL(img)} className="w-full h-full object-cover rounded-xl border border-white/[0.1]" />

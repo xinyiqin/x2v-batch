@@ -36,10 +36,31 @@ fi
 # 检查端口是否被占用
 check_port() {
     local port=$1
-    if lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1 ; then
-        echo -e "${YELLOW}⚠️  警告: 端口 $port 已被占用${NC}"
-        echo "   请先停止占用该端口的服务，或修改脚本中的端口配置"
-        return 1
+    local pid=$(lsof -ti:$port 2>/dev/null)
+    if [ ! -z "$pid" ]; then
+        echo -e "${YELLOW}⚠️  警告: 端口 $port 已被占用 (PID: $pid)${NC}"
+        echo "   正在尝试清理占用该端口的进程..."
+        
+        # 尝试优雅地停止进程
+        kill -TERM $pid 2>/dev/null || true
+        sleep 1
+        
+        # 检查进程是否还在运行
+        if kill -0 $pid 2>/dev/null; then
+            # 如果还在运行，强制杀掉
+            echo "   强制停止进程 $pid..."
+            kill -9 $pid 2>/dev/null || true
+            sleep 1
+        fi
+        
+        # 再次检查端口是否被释放
+        if lsof -ti:$port >/dev/null 2>&1; then
+            echo -e "${RED}❌ 无法释放端口 $port，请手动停止占用该端口的服务${NC}"
+            return 1
+        else
+            echo -e "${GREEN}✅ 端口 $port 已释放${NC}"
+            return 0
+        fi
     fi
     return 0
 }
@@ -67,6 +88,7 @@ fi
 
 # 设置默认环境变量
 export LIGHTX2V_BASE_URL="${LIGHTX2V_BASE_URL:-https://x2v.light-ai.top}"
+export LIGHTX2V_ACCESS_TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ2l0aHViXzkyNDg0NDAzIiwidXNlcm5hbWUiOiJ4aW55aXFpbiIsImVtYWlsIjoicXh5MTE4MDQ1NTM0QDE2My5jb20iLCJob21lcGFnZSI6Imh0dHBzOi8vZ2l0aHViLmNvbS94aW55aXFpbiIsInRva2VuX3R5cGUiOiJhY2Nlc3MiLCJpYXQiOjE3Njc3Nzg2MTIsImV4cCI6MTc2ODM4MzQxMiwianRpIjoiMDA2NjQ1ZTUtMzZkMy00MjRkLTkzMTYtOThlODY5NTg0OTY3In0.YrMHZlAgRLQeE82oYgaHfjl8ZA2DuJFpC2w5ihBQGVw"
 export DATA_DIR="${DATA_DIR:-./data}"
 export PYTHONPATH="$SCRIPT_DIR:$PYTHONPATH"
 
@@ -92,12 +114,59 @@ mkdir -p "$DATA_DIR"/{images,audios,videos,batches}
 # 清理函数
 cleanup() {
     echo -e "\n${YELLOW}🛑 正在停止服务...${NC}"
-    if [ ! -z "$BACKEND_PID" ]; then
-        kill $BACKEND_PID 2>/dev/null || true
+    
+    # 杀掉后端进程及其子进程
+    if [ ! -z "$BACKEND_PID" ] && kill -0 $BACKEND_PID 2>/dev/null; then
+        echo "   正在停止后端服务 (PID: $BACKEND_PID)..."
+        # 先尝试优雅退出
+        kill -TERM $BACKEND_PID 2>/dev/null || true
+        # 等待进程退出
+        sleep 2
+        # 如果还在运行，强制杀掉进程及其子进程
+        if kill -0 $BACKEND_PID 2>/dev/null; then
+            # 获取进程组 ID 并杀掉整个进程组
+            PGID=$(ps -o pgid= -p $BACKEND_PID 2>/dev/null | tr -d ' ')
+            if [ ! -z "$PGID" ]; then
+                kill -TERM -$PGID 2>/dev/null || true
+                sleep 1
+                kill -9 -$PGID 2>/dev/null || true
+            else
+                kill -9 $BACKEND_PID 2>/dev/null || true
+            fi
+        fi
     fi
-    if [ ! -z "$FRONTEND_PID" ]; then
-        kill $FRONTEND_PID 2>/dev/null || true
+    
+    # 杀掉前端进程及其子进程
+    if [ ! -z "$FRONTEND_PID" ] && kill -0 $FRONTEND_PID 2>/dev/null; then
+        echo "   正在停止前端服务 (PID: $FRONTEND_PID)..."
+        # 先尝试优雅退出
+        kill -TERM $FRONTEND_PID 2>/dev/null || true
+        # 等待进程退出
+        sleep 2
+        # 如果还在运行，强制杀掉进程及其子进程
+        if kill -0 $FRONTEND_PID 2>/dev/null; then
+            # 获取进程组 ID 并杀掉整个进程组
+            PGID=$(ps -o pgid= -p $FRONTEND_PID 2>/dev/null | tr -d ' ')
+            if [ ! -z "$PGID" ]; then
+                kill -TERM -$PGID 2>/dev/null || true
+                sleep 1
+                kill -9 -$PGID 2>/dev/null || true
+            else
+                kill -9 $FRONTEND_PID 2>/dev/null || true
+            fi
+        fi
     fi
+    
+    # 额外清理：杀掉可能残留的 uvicorn 进程（通过端口或进程名）
+    echo "   清理残留的后端进程..."
+    lsof -ti:8000 | xargs kill -9 2>/dev/null || true
+    pkill -f "uvicorn server.main:app" 2>/dev/null || true
+    
+    # 额外清理：杀掉可能残留的 vite 进程（通过端口或进程名）
+    echo "   清理残留的前端进程..."
+    lsof -ti:3000 | xargs kill -9 2>/dev/null || true
+    pkill -f "vite" 2>/dev/null || true
+    
     echo -e "${GREEN}✅ 服务已停止${NC}"
     exit 0
 }
@@ -108,7 +177,13 @@ trap cleanup SIGINT SIGTERM
 # 启动后端服务
 echo -e "${GREEN}🔧 启动后端服务 (端口 8000)...${NC}"
 cd "$SCRIPT_DIR"
-python3 -m uvicorn server.main:app --host 0.0.0.0 --port 8000 --reload > server.log 2>&1 &
+# 使用 nohup 或直接后台运行（macOS 可能没有 setsid）
+if command -v setsid &> /dev/null; then
+    setsid python3 -m uvicorn server.main:app --host 0.0.0.0 --port 8000 --reload > server.log 2>&1 &
+else
+    # macOS 上没有 setsid，使用 nohup 或直接后台运行
+    python3 -m uvicorn server.main:app --host 0.0.0.0 --port 8000 --reload > server.log 2>&1 &
+fi
 BACKEND_PID=$!
 echo "   后端服务 PID: $BACKEND_PID"
 
@@ -131,7 +206,13 @@ cd "$SCRIPT_DIR/frontend"
 # 设置前端 API 地址
 export VITE_API_BASE="http://localhost:8000"
 
-npm run dev > ../frontend.log 2>&1 &
+# 使用 nohup 或直接后台运行（macOS 可能没有 setsid）
+if command -v setsid &> /dev/null; then
+    setsid npm run dev > ../frontend.log 2>&1 &
+else
+    # macOS 上没有 setsid，使用 nohup 或直接后台运行
+    npm run dev > ../frontend.log 2>&1 &
+fi
 FRONTEND_PID=$!
 echo "   前端服务 PID: $FRONTEND_PID"
 

@@ -8,7 +8,7 @@ import { Login } from './components/Login';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
 import { Batch, ViewState, User } from './types';
 import { translations, Language } from './translations';
-import { getToken, clearToken, getProfile, getBatches, getAllUsers, getAllBatches } from './api';
+import { getToken, clearToken, getProfile, getBatches, getAllUsers, getAllBatches, checkTokenStatus } from './api';
 
 const App: React.FC = () => {
   const [activeUser, setActiveUser] = useState<User | null>(null);
@@ -18,6 +18,8 @@ const App: React.FC = () => {
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   const [lang, setLang] = useState<Language>('zh');
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+  const [tokenValid, setTokenValid] = useState<boolean | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const t = translations[lang];
 
@@ -36,6 +38,29 @@ const App: React.FC = () => {
         });
     }
   }, []);
+
+  // 定期检查 API token 状态
+  useEffect(() => {
+    if (!activeUser) return;
+
+    // 立即检查一次
+    const checkStatus = async () => {
+      try {
+        const status = await checkTokenStatus();
+        setTokenValid(status.valid);
+      } catch (error) {
+        console.error('Failed to check token status:', error);
+        setTokenValid(false);
+      }
+    };
+
+    checkStatus();
+
+    // 每30秒检查一次
+    const interval = setInterval(checkStatus, 30000);
+
+    return () => clearInterval(interval);
+  }, [activeUser]);
 
   // 加载用户批次
   const loadUserBatches = async (userId: string) => {
@@ -185,12 +210,29 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen overflow-hidden bg-black">
+      {/* Mobile Sidebar Overlay */}
+      {sidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/60 z-40 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar - Persistent navigation */}
       <Sidebar 
         batches={userBatches} 
-        onSelectBatch={handleSelectBatch} 
-        onNewProject={handleNewProject}
-        onOpenAdmin={handleOpenAdmin}
+        onSelectBatch={(id) => {
+          handleSelectBatch(id);
+          setSidebarOpen(false); // Close sidebar on mobile after selection
+        }}
+        onNewProject={() => {
+          handleNewProject();
+          setSidebarOpen(false); // Close sidebar on mobile
+        }}
+        onOpenAdmin={() => {
+          handleOpenAdmin();
+          setSidebarOpen(false); // Close sidebar on mobile
+        }}
         onLogout={handleLogout}
         onOpenChangePassword={() => setShowChangePasswordModal(true)}
         selectedId={selectedBatchId}
@@ -200,6 +242,9 @@ const App: React.FC = () => {
         username={activeUser.username}
         isAdmin={activeUser.isAdmin}
         currentView={currentViewState}
+        tokenValid={tokenValid}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
       />
 
       {/* Change Password Modal */}
@@ -211,12 +256,63 @@ const App: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 overflow-y-auto bg-black">
-        <div className="max-w-7xl mx-auto p-6 md:p-10">
+        {/* Mobile Top Bar */}
+        <div className="md:hidden sticky top-0 z-30 bg-black/80 backdrop-blur-xl border-b border-white/[0.06] px-4 py-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setSidebarOpen(true)}
+                className="p-2 text-white hover:bg-white/[0.1] rounded-lg transition-colors"
+                aria-label="Open menu"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="3" x2="21" y1="6" y2="6"/>
+                  <line x1="3" x2="21" y1="12" y2="12"/>
+                  <line x1="3" x2="21" y1="18" y2="18"/>
+                </svg>
+              </button>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm" style={{ background: 'linear-gradient(135deg, #90dce1 0%, #6fc4cc 100%)', color: '#000' }}>V</div>
+                <span className="text-lg font-semibold text-white">{t.brand}</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              {/* API Token Status Indicator */}
+              <div 
+                className="w-2.5 h-2.5 rounded-full transition-all duration-300"
+                style={{
+                  backgroundColor: tokenValid === null 
+                    ? '#6b7280'
+                    : tokenValid 
+                      ? '#10b981'
+                      : '#ef4444',
+                  boxShadow: tokenValid === true 
+                    ? '0 0 8px rgba(16, 185, 129, 0.6)' 
+                    : tokenValid === false
+                      ? '0 0 8px rgba(239, 68, 68, 0.6)'
+                      : 'none'
+                }}
+                title={tokenValid === null 
+                  ? (lang === 'zh' ? '检查中...' : 'Checking...')
+                  : tokenValid 
+                    ? (lang === 'zh' ? 'API Token 有效' : 'API Token Valid')
+                    : (lang === 'zh' ? 'API Token 无效或已过期' : 'API Token Invalid or Expired')
+                }
+              />
+              <div className="text-right">
+                <div className="text-xs text-gray-400">{t.balance}</div>
+                <div className="text-sm font-semibold text-white">{activeUser.credits} {t.credits}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="max-w-7xl mx-auto p-4 md:p-6 lg:p-10">
           {currentViewState === 'create' ? (
             <div className="animate-in fade-in duration-500">
-              <header className="mb-10">
-                <h1 className="text-4xl font-semibold tracking-tight text-white mb-3">{t.createTitle}</h1>
-                <p className="text-gray-400 text-base">{t.createSubtitle}</p>
+              <header className="mb-6 md:mb-10">
+                <h1 className="text-2xl md:text-4xl font-semibold tracking-tight text-white mb-2 md:mb-3">{t.createTitle}</h1>
+                <p className="text-gray-400 text-sm md:text-base">{t.createSubtitle}</p>
               </header>
               <BatchForm onCreated={handleCreateBatch} lang={lang} userCredits={activeUser.credits} />
             </div>

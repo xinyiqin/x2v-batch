@@ -21,6 +21,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ users, batches, onUpdate
   const [newCredits, setNewCredits] = useState(100);
   const [isCreating, setIsCreating] = useState(false);
 
+  // 计算非admin用户的任务总数
+  const nonAdminUserIds = new Set(users.filter(u => !u.isAdmin).map(u => u.id));
+  const nonAdminBatchesCount = batches.filter(b => nonAdminUserIds.has(b.userId)).length;
+
 
   const startEditing = (user: User) => {
     setEditingUserId(user.id);
@@ -66,7 +70,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ users, batches, onUpdate
             <div className="p-3 rounded-2xl" style={{ background: 'rgba(144, 220, 225, 0.12)' }}>
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: '#90dce1' }}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             </div>
-            <h2 className="text-3xl font-semibold text-white tracking-tight">{t.userManagement}</h2>
+            <div>
+              <h2 className="text-3xl font-semibold text-white tracking-tight">{t.userManagement}</h2>
+              <p className="text-sm text-gray-400 mt-1">
+                {t.totalTasksByNonAdmin}: <span className="text-[#90dce1] font-semibold">{nonAdminBatchesCount}</span>
+              </p>
+            </div>
           </div>
           <button
             onClick={() => setShowCreateUserModal(true)}

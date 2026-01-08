@@ -2,7 +2,7 @@
  * API 客户端 - 处理所有后端 API 调用
  */
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
+const API_BASE = (import.meta as any).env?.VITE_API_BASE || 'http://localhost:8000';
 
 // 从 localStorage 获取 token
 function getToken(): string | null {
@@ -112,24 +112,41 @@ export async function login(username: string, password: string): Promise<LoginRe
 
   // 检查响应类型
   const contentType = response.headers.get('content-type');
-  if (!contentType || !contentType.includes('application/json')) {
-    // 如果返回的不是 JSON，可能是 HTML 错误页面
-    const text = await response.text();
-    console.error('Non-JSON response:', text.substring(0, 200));
-    throw new Error(`Server returned non-JSON response. Check API_BASE: ${API_BASE}`);
-  }
+  const isJson = contentType && contentType.includes('application/json');
 
   // 登录接口的 401 不应该清除 token 和重载页面，应该显示错误
   if (!response.ok) {
-    try {
-      const error = await response.json();
-      throw new Error(error.detail || `HTTP ${response.status}`);
-    } catch (e) {
-      if (e instanceof Error && e.message.includes('JSON')) {
-        throw e;
+    if (isJson) {
+      try {
+        const error = await response.json();
+        // 优先使用后端返回的详细错误信息
+        const errorMessage = error.detail || error.message || `HTTP ${response.status}`;
+        throw new Error(errorMessage);
+      } catch (e) {
+        if (e instanceof Error && !e.message.includes('JSON')) {
+          // 如果已经是解析好的错误，直接抛出
+          throw e;
+        }
+        // 如果解析失败，根据状态码返回友好的错误信息
+        if (response.status === 401) {
+          throw new Error('Invalid username or password');
+        }
+        throw new Error(`Login failed: HTTP ${response.status}`);
       }
-      throw new Error(`Login failed: HTTP ${response.status}`);
+    } else {
+      // 如果返回的不是 JSON，可能是 HTML 错误页面
+      const text = await response.text();
+      console.error('Non-JSON response:', text.substring(0, 200));
+      if (response.status === 401) {
+        throw new Error('Invalid username or password');
+      }
+      throw new Error(`Server returned non-JSON response. Check API_BASE: ${API_BASE}`);
     }
+  }
+
+  // 响应成功，解析 JSON
+  if (!isJson) {
+    throw new Error('Server returned non-JSON response');
   }
 
   const data = await response.json();
@@ -361,6 +378,39 @@ export function getFileUrl(filenameOrPath: string, subdir: string = 'images'): s
   // 对文件名进行 URL 编码，处理空格和特殊字符
   const encodedFilename = encodeURIComponent(filenameOrPath);
   return `${API_BASE}/api/files/${subdir}/${encodedFilename}`;
+}
+
+// 检查 S2V API token 状态
+export async function checkTokenStatus(): Promise<{ valid: boolean; error?: string }> {
+  return request<{ valid: boolean; error?: string }>('/api/token/status');
+}
+
+// 导出批次的所有视频为zip文件
+export async function exportBatchVideos(batchId: string): Promise<Blob> {
+  const token = getToken();
+  if (!token) {
+    throw new Error('Not authenticated');
+  }
+
+  const response = await fetch(`${API_BASE}/api/video/batches/${batchId}/export`, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+    },
+  });
+
+  if (response.status === 401) {
+    clearToken();
+    window.location.reload();
+    throw new Error('Unauthorized');
+  }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return await response.blob();
 }
 
 export { clearToken, getToken };
