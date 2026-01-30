@@ -2,12 +2,14 @@
 批次处理器 - 负责处理批次任务，调用 S2V API
 """
 import asyncio
+from datetime import datetime
 from typing import Dict, Any
 from loguru import logger
 
 from tools.s2v_client import S2VClient
 from server.task_manager import TaskManager, VideoItemStatus, BatchStatus
 from server.data_manager import LocalDataManager
+from server.auth import AuthManager
 
 
 class BatchProcessor:
@@ -17,6 +19,7 @@ class BatchProcessor:
         self,
         task_manager: TaskManager,
         data_manager: LocalDataManager,
+        auth_manager: AuthManager,
         base_url: str,
         access_token: str,
     ):
@@ -31,6 +34,7 @@ class BatchProcessor:
         """
         self.task_manager = task_manager
         self.data_manager = data_manager
+        self.auth_manager = auth_manager
         self.base_url = base_url
         self.access_token = access_token
         self.client = S2VClient(base_url=base_url, access_token=access_token)
@@ -83,6 +87,7 @@ class BatchProcessor:
         if batch:
             batch.update_status()
             await self.task_manager._save_batch(batch)
+            await self._charge_completed_batch(batch.id)
         
         logger.info(f"Batch {batch_id} processing completed")
     
@@ -101,6 +106,10 @@ class BatchProcessor:
             audio_data: 音频数据（字节）
         """
         try:
+            current_item = self.task_manager.get_video_item(batch.id, item.id)
+            if current_item and current_item.status == VideoItemStatus.CANCELLED:
+                return
+
             # 更新状态为处理中，设置估算时间（默认60秒，可根据实际情况调整）
             await self.task_manager.update_video_item(
                 batch_id=batch.id,
@@ -166,6 +175,10 @@ class BatchProcessor:
                     poll_interval=5,
                     timeout=3600,
                 )
+
+                current_item = self.task_manager.get_video_item(batch.id, item.id)
+                if current_item and current_item.status == VideoItemStatus.CANCELLED:
+                    return
                 
                 if not final_result.get("success"):
                     error_msg = final_result.get("error", "Unknown error")
@@ -229,3 +242,219 @@ class BatchProcessor:
                 error_msg=str(e),
             )
 
+    async def cancel_item(self, batch_id: str, item_id: str) -> bool:
+        """取消单个子任务"""
+        batch = self.task_manager.get_batch(batch_id)
+        if not batch:
+            return False
+
+        item = self.task_manager.get_video_item(batch_id, item_id)
+        if not item:
+            return False
+
+        if item.status in [VideoItemStatus.COMPLETED, VideoItemStatus.FAILED, VideoItemStatus.CANCELLED]:
+            return False
+
+        if item.api_task_id:
+            await self.client.cancel_task(item.api_task_id)
+
+        await self.task_manager.update_video_item(
+            batch_id=batch_id,
+            item_id=item_id,
+            status=VideoItemStatus.CANCELLED,
+            error_msg="Cancelled by user",
+        )
+        await self._charge_completed_batch(batch_id)
+        return True
+
+    async def resume_item(self, batch_id: str, item_id: str) -> bool:
+        """重试单个失败子任务"""
+        batch = self.task_manager.get_batch(batch_id)
+        if not batch:
+            return False
+
+        item = self.task_manager.get_video_item(batch_id, item_id)
+        if not item or item.status != VideoItemStatus.FAILED:
+            return False
+
+        if not item.api_task_id:
+            await self.task_manager.update_video_item(
+                batch_id=batch_id,
+                item_id=item_id,
+                status=VideoItemStatus.FAILED,
+                error_msg="Missing task id for resume",
+            )
+            await self._charge_completed_batch(batch_id)
+            return False
+
+        await self.task_manager.update_video_item(
+            batch_id=batch_id,
+            item_id=item_id,
+            status=VideoItemStatus.PROCESSING,
+            error_msg=None,
+            estimated_duration=60,
+        )
+
+        success, resume_error = await self.client.resume_task(item.api_task_id)
+        if not success:
+            error_msg = resume_error or "Resume failed"
+            logger.warning(f"Resume task failed for item {item_id}: {error_msg}")
+            # 后端任务可能已成功（例如取消未生效、任务在后台跑完），尝试同步结果
+            if resume_error and "Succeed task cannot be resumed" in (resume_error or ""):
+                task_info = await self.client.query_task(item.api_task_id)
+                st = task_info.get("status")
+                is_succeed = st == "SUCCEED" or st == 4
+                if task_info.get("success") and is_succeed:
+                    result_url = await self.client.get_result_url(item.api_task_id, name="output_video")
+                    if result_url:
+                        logger.info(f"Task {item.api_task_id} already succeeded, syncing result for item {item_id}")
+                        await self.task_manager.update_video_item(
+                            batch_id=batch_id,
+                            item_id=item_id,
+                            status=VideoItemStatus.COMPLETED,
+                            video_url=result_url,
+                        )
+                        await self._charge_completed_batch(batch_id)
+                        return True
+            await self.task_manager.update_video_item(
+                batch_id=batch_id,
+                item_id=item_id,
+                status=VideoItemStatus.FAILED,
+                error_msg=error_msg,
+            )
+            await self._charge_completed_batch(batch_id)
+            return False
+
+        final_result = await self.client.wait_for_task(
+            item.api_task_id,
+            poll_interval=5,
+            timeout=3600,
+        )
+
+        current_item = self.task_manager.get_video_item(batch_id, item_id)
+        if current_item and current_item.status == VideoItemStatus.CANCELLED:
+            return True
+
+        if not final_result.get("success"):
+            error_msg = final_result.get("error", "Unknown error")
+            await self.task_manager.update_video_item(
+                batch_id=batch_id,
+                item_id=item_id,
+                status=VideoItemStatus.FAILED,
+                error_msg=error_msg,
+            )
+            return False
+
+        status = final_result.get("status", "UNKNOWN")
+        if status == "SUCCEED":
+            result_url = await self.client.get_result_url(item.api_task_id, name="output_video")
+            if result_url:
+                await self.task_manager.update_video_item(
+                    batch_id=batch_id,
+                    item_id=item_id,
+                    status=VideoItemStatus.COMPLETED,
+                    video_url=result_url,
+                )
+                await self._charge_completed_batch(batch_id)
+                return True
+            await self.task_manager.update_video_item(
+                batch_id=batch_id,
+                item_id=item_id,
+                status=VideoItemStatus.FAILED,
+                error_msg="No result URL returned",
+            )
+            await self._charge_completed_batch(batch_id)
+            return False
+
+        await self.task_manager.update_video_item(
+            batch_id=batch_id,
+            item_id=item_id,
+            status=VideoItemStatus.FAILED,
+            error_msg=f"Task status: {status}",
+        )
+        await self._charge_completed_batch(batch_id)
+        return False
+
+    async def reprocess_item(self, batch_id: str, item_id: str) -> bool:
+        """重新处理已取消的子任务（置为 PENDING 后重新走一遍流程）"""
+        batch = self.task_manager.get_batch(batch_id)
+        if not batch:
+            return False
+
+        item = self.task_manager.get_video_item(batch_id, item_id)
+        if not item or item.status != VideoItemStatus.CANCELLED:
+            return False
+
+        await self.task_manager.update_video_item(
+            batch_id=batch_id,
+            item_id=item_id,
+            status=VideoItemStatus.PENDING,
+            error_msg=None,
+        )
+        audio_data = await self.data_manager.load_bytes(batch.audio_filename, "audios")
+        batch = self.task_manager.get_batch(batch_id)
+        item = self.task_manager.get_video_item(batch_id, item_id) if batch else None
+        if not batch or not item:
+            return False
+        await self._process_video_item(batch, item, audio_data)
+        await self._charge_completed_batch(batch_id)
+        return True
+
+    async def resume_failed_items(self, batch_id: str) -> int:
+        """批量重试失败或已取消的子任务：失败走 resume，已取消走 reprocess"""
+        batch = self.task_manager.get_batch(batch_id)
+        if not batch:
+            return 0
+
+        failed_items = [item for item in batch.items if item.status == VideoItemStatus.FAILED]
+        cancelled_items = [item for item in batch.items if item.status == VideoItemStatus.CANCELLED]
+        to_retry = failed_items + cancelled_items
+        if not to_retry:
+            return 0
+
+        semaphore = asyncio.Semaphore(3)
+
+        async def do_retry(item):
+            async with semaphore:
+                if item.status == VideoItemStatus.FAILED:
+                    await self.resume_item(batch_id, item.id)
+                else:
+                    await self.reprocess_item(batch_id, item.id)
+
+        await asyncio.gather(*[do_retry(item) for item in to_retry])
+        return len(to_retry)
+
+    async def _charge_completed_batch(self, batch_id: str):
+        """按已完成任务数扣除积分（支持首次完成与重试成功后增量扣费，规则与正常任务一致）"""
+        batch = self.task_manager.get_batch(batch_id)
+        if not batch:
+            return
+
+        credits_per_video = getattr(batch, "credits_per_video", 0)
+        if credits_per_video <= 0:
+            return
+
+        completed_count = sum(1 for item in batch.items if item.status == VideoItemStatus.COMPLETED)
+        # 已扣费对应的完成数（向下取整，与扣费规则一致）
+        already_charged_count = batch.credits_used // credits_per_video
+        delta = completed_count - already_charged_count
+
+        if delta <= 0:
+            if batch.status == BatchStatus.COMPLETED:
+                batch.credits_charged = True
+                batch.updated_at = datetime.now()
+                await self.task_manager._save_batch(batch)
+            return
+
+        credits_to_charge = credits_per_video * delta
+        if not await self.auth_manager.deduct_credits(batch.user_id, credits_to_charge):
+            logger.warning(
+                f"Failed to deduct {credits_to_charge} credits for user {batch.user_id} on batch {batch_id}"
+            )
+            return
+
+        batch.credits_used = batch.credits_used + credits_to_charge
+        batch.updated_at = datetime.now()
+        if batch.status == BatchStatus.COMPLETED:
+            batch.credits_charged = True
+        await self.task_manager._save_batch(batch)

@@ -67,6 +67,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   }, []);
 
+  const isBatchComplete = (batch: Batch) =>
+    batch.items.every(item => item.status === 'completed' || item.status === 'failed' || item.status === 'cancelled');
+
   return (
     <aside className={`
       fixed md:static inset-y-0 left-0 z-50
@@ -210,7 +213,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <span className="font-medium truncate">{batch.name}</span>
                   <span className="text-[11px] opacity-70">
                       {new Date(batch.timestamp).toLocaleDateString()} • {batch.imageCount} {t.videos || 'videos'}
-                      {batch.creditsUsed !== undefined && batch.creditsUsed > 0 && (
+                      {isBatchComplete(batch) && batch.creditsUsed !== undefined && batch.creditsUsed > 0 && (
                         <> • {batch.creditsUsed} {t.credits}</>
                       )}
                   </span>

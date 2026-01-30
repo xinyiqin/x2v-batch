@@ -4,7 +4,8 @@ from tools.s2v_client import S2VClient
 async def main():
     client = S2VClient(
         base_url="https://x2v.light-ai.top",
-        access_token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiZ2l0aHViXzkyNDg0NDAzIiwidXNlcm5hbWUiOiJ4aW55aXFpbiIsImVtYWlsIjoicXh5MTE4MDQ1NTM0QDE2My5jb20iLCJob21lcGFnZSI6Imh0dHBzOi8vZ2l0aHViLmNvbS94aW55aXFpbiIsInRva2VuX3R5cGUiOiJhY2Nlc3MiLCJpYXQiOjE3Njc3Nzg2MTIsImV4cCI6MTc2ODM4MzQxMiwianRpIjoiMDA2NjQ1ZTUtMzZkMy00MjRkLTkzMTYtOThlODY5NTg0OTY3In0.YrMHZlAgRLQeE82oYgaHfjl8ZA2DuJFpC2w5ihBQGVw"
+        # access_token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoicGhvbmVfMTg4MTA3Mzk3MTUiLCJ1c2VybmFtZSI6IjE4ODEwNzM5NzE1IiwiZW1haWwiOiIiLCJob21lcGFnZSI6IiIsInRva2VuX3R5cGUiOiJhY2Nlc3MiLCJpYXQiOjE3NjkxNTQxNzMsImV4cCI6MTc2OTc1ODk3MywianRpIjoiYmQzMGZmNDMtZDFiOS00ZWU5LTgxN2MtZDYxMjMwYTk1YTI2In0._2S4bg9vGztHMJIecPcGtwKTJ7NpgEe6HPUed6y8kpU"
+        access_token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoicGhvbmVfMTg4MTA3Mzk3MTUiLCJ1c2VybmFtZSI6IjE4ODEwNzM5NzE1IiwiZW1haWwiOiIiLCJob21lcGFnZSI6IiIsInRva2VuX3R5cGUiOiJhY2Nlc3MiLCJpYXQiOjE3NjkxNTk2ODEsImV4cCI6MTc2OTc2NDQ4MSwianRpIjoiNjMzYjgyOTQtNzQwYi00OTg2LWFmYWUtYTNmMjAwYWQ3YTU4In0.V0IS2aQeCML7j4cxoJAX1ISu0_BnA-Ae4k-8O4ruDzI"
     )
     try:
         submit = await client.submit_task(

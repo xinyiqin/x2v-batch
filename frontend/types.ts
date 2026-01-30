@@ -3,7 +3,7 @@ export interface VideoItem {
   id: string;
   sourceImage: string;
   videoUrl: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
   progress?: number;  // 进度百分比 0-100
   elapsed_time?: number;  // 已运行时间（秒）
   error_msg?: string;
@@ -17,6 +17,7 @@ export interface BatchProgress {
   processing: number;
   pending: number;
   failed: number;
+  cancelled?: number;
 }
 
 export interface Batch {

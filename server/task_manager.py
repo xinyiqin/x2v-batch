@@ -19,6 +19,7 @@ class VideoItemStatus(Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class BatchStatus(Enum):
@@ -67,7 +68,7 @@ class VideoItem:
         """
         if self.status == VideoItemStatus.COMPLETED:
             return 100
-        elif self.status == VideoItemStatus.FAILED:
+        elif self.status in [VideoItemStatus.FAILED, VideoItemStatus.CANCELLED]:
             return 0
         elif self.status == VideoItemStatus.PENDING:
             return 0
@@ -164,6 +165,8 @@ class Batch:
         items: Optional[List[VideoItem]] = None,
         status: BatchStatus = BatchStatus.CREATED,
         credits_used: int = 0,
+        credits_per_video: int = 0,
+        credits_charged: bool = False,
     ):
         self.id = batch_id
         self.user_id = user_id
@@ -175,6 +178,8 @@ class Batch:
         self.items = items or []
         self.status = status
         self.credits_used = credits_used  # 批次消耗的灵感值
+        self.credits_per_video = credits_per_video
+        self.credits_charged = credits_charged
         self.created_at = datetime.now()
         self.updated_at = datetime.now()
     
@@ -206,6 +211,7 @@ class Batch:
                 "processing": 0,
                 "pending": 0,
                 "failed": 0,
+                "cancelled": 0,
             }
         
         total = len(self.items)
@@ -213,6 +219,7 @@ class Batch:
         processing = sum(1 for item in self.items if item.status == VideoItemStatus.PROCESSING)
         pending = sum(1 for item in self.items if item.status == VideoItemStatus.PENDING)
         failed = sum(1 for item in self.items if item.status == VideoItemStatus.FAILED)
+        cancelled = sum(1 for item in self.items if item.status == VideoItemStatus.CANCELLED)
         
         return {
             "overall_progress": self.get_overall_progress(),
@@ -221,6 +228,7 @@ class Batch:
             "processing": processing,
             "pending": pending,
             "failed": failed,
+            "cancelled": cancelled,
         }
     
     def to_dict(self) -> Dict[str, Any]:
@@ -239,6 +247,8 @@ class Batch:
             "progress": progress_info,
             "items": [item.to_dict() for item in self.items],
             "creditsUsed": self.credits_used,  # 批次消耗的灵感值
+            "creditsPerVideo": self.credits_per_video,
+            "creditsCharged": self.credits_charged,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
@@ -256,6 +266,8 @@ class Batch:
             image_count=data["imageCount"],
             status=BatchStatus(data.get("status", "created")),
             credits_used=data.get("creditsUsed", 0),  # 兼容旧数据，默认为0
+            credits_per_video=data.get("creditsPerVideo", 0),
+            credits_charged=data.get("creditsCharged", False),
         )
         if "items" in data:
             batch.items = []
@@ -296,8 +308,8 @@ class Batch:
         
         if all(s == VideoItemStatus.COMPLETED for s in statuses):
             self.status = BatchStatus.COMPLETED
-        elif any(s == VideoItemStatus.FAILED for s in statuses):
-            if all(s in [VideoItemStatus.COMPLETED, VideoItemStatus.FAILED] for s in statuses):
+        elif any(s in [VideoItemStatus.FAILED, VideoItemStatus.CANCELLED] for s in statuses):
+            if all(s in [VideoItemStatus.COMPLETED, VideoItemStatus.FAILED, VideoItemStatus.CANCELLED] for s in statuses):
                 self.status = BatchStatus.COMPLETED  # 部分失败也算完成
             else:
                 self.status = BatchStatus.PROCESSING
@@ -526,6 +538,7 @@ class TaskManager:
         audio_filename: str,
         image_filenames: List[str],
         credits_used: int = 0,
+        credits_per_video: int = 0,
     ) -> Batch:
         """
         创建新批次（异步）
@@ -565,6 +578,7 @@ class TaskManager:
             items=items,
             status=BatchStatus.CREATED,
             credits_used=credits_used,
+            credits_per_video=credits_per_video,
         )
         
         self._batches[batch.id] = batch
@@ -626,8 +640,8 @@ class TaskManager:
             # 状态变为 PROCESSING 时记录开始时间
             if status == VideoItemStatus.PROCESSING and old_status != VideoItemStatus.PROCESSING:
                 item.started_at = datetime.now()
-            # 状态变为 COMPLETED 或 FAILED 时记录完成时间
-            elif status in [VideoItemStatus.COMPLETED, VideoItemStatus.FAILED]:
+            # 状态变为 COMPLETED、FAILED 或 CANCELLED 时记录完成时间
+            elif status in [VideoItemStatus.COMPLETED, VideoItemStatus.FAILED, VideoItemStatus.CANCELLED]:
                 item.completed_at = datetime.now()
         
         if video_filename is not None:

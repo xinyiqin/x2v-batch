@@ -206,6 +206,7 @@ if not _S2V_ACCESS_TOKEN:
 batch_processor = BatchProcessor(
     task_manager=task_manager,
     data_manager=data_manager,
+    auth_manager=auth_manager,
     base_url=S2V_BASE_URL,
     access_token=_S2V_ACCESS_TOKEN,
 )
@@ -479,14 +480,7 @@ async def create_batch(
     # 使用 asyncio.gather 并发上传所有图片
     image_filenames = await asyncio.gather(*[save_single_image(img) for img in images])
     
-    # 扣除灵感值
-    if not await auth_manager.deduct_credits(user["user_id"], required_credits):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Insufficient credits"
-        )
-    
-    # 创建批次（记录消耗的积分）
+    # 创建批次（记录每个视频的积分）
     batch_name = f"批次 {user_info['username']} {asyncio.get_event_loop().time()}"
     batch = await task_manager.create_batch(
         user_id=user["user_id"],
@@ -495,7 +489,8 @@ async def create_batch(
         prompt=prompt,
         audio_filename=audio_filename,
         image_filenames=image_filenames,
-        credits_used=required_credits,  # 记录消耗的灵感值
+        credits_used=0,
+        credits_per_video=credits_per_video,
     )
     
     # 异步处理批次
@@ -553,6 +548,121 @@ async def get_batch(
             item["sourceImage"] = await data_manager.get_url(item["sourceImage"], "images")
     
     return batch_dict
+
+
+@app.post("/api/video/batches/{batch_id}/items/{item_id}/cancel")
+async def cancel_batch_item(
+    batch_id: str,
+    item_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """取消单个任务"""
+    from server.task_manager import VideoItemStatus
+    
+    batch = task_manager.get_batch(batch_id)
+    if not batch:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Batch not found"
+        )
+    
+    if batch.user_id != user["user_id"] and not user.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied"
+        )
+    
+    item = task_manager.get_video_item(batch_id, item_id)
+    if not item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Item not found"
+        )
+    
+    if item.status in [VideoItemStatus.COMPLETED, VideoItemStatus.FAILED, VideoItemStatus.CANCELLED]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Item already finished"
+        )
+    
+    success = await batch_processor.cancel_item(batch_id, item_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cancel failed"
+        )
+    
+    return {"success": True}
+
+
+@app.post("/api/video/batches/{batch_id}/items/{item_id}/resume")
+async def resume_batch_item(
+    batch_id: str,
+    item_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """重试单个失败任务"""
+    from server.task_manager import VideoItemStatus
+    
+    batch = task_manager.get_batch(batch_id)
+    if not batch:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Batch not found"
+        )
+    
+    if batch.user_id != user["user_id"] and not user.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied"
+        )
+    
+    item = task_manager.get_video_item(batch_id, item_id)
+    if not item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Item not found"
+        )
+    
+    if item.status != VideoItemStatus.FAILED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only failed items can be retried"
+        )
+    
+    asyncio.create_task(batch_processor.resume_item(batch_id, item_id))
+    return {"success": True}
+
+
+@app.post("/api/video/batches/{batch_id}/retry_failed")
+async def retry_failed_items(
+    batch_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """批量重试失败任务"""
+    from server.task_manager import VideoItemStatus
+    
+    batch = task_manager.get_batch(batch_id)
+    if not batch:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Batch not found"
+        )
+    
+    if batch.user_id != user["user_id"] and not user.get("is_admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied"
+        )
+    
+    failed_items = [item for item in batch.items if item.status == VideoItemStatus.FAILED]
+    cancelled_items = [item for item in batch.items if item.status == VideoItemStatus.CANCELLED]
+    to_retry_count = len(failed_items) + len(cancelled_items)
+    if to_retry_count == 0:
+        return {"success": True, "count": 0}
+    
+    asyncio.create_task(batch_processor.resume_failed_items(batch_id))
+    return {"success": True, "count": to_retry_count}
 
 
 @app.get("/api/video/batches/{batch_id}/export")

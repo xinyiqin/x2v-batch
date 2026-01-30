@@ -205,7 +205,7 @@ export interface VideoItem {
   id: string;
   sourceImage: string;
   videoUrl: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
   error_msg?: string;
 }
 
@@ -257,6 +257,27 @@ export async function getBatches(limit: number = 50, offset: number = 0): Promis
 
 export async function getBatch(batchId: string): Promise<Batch> {
   return request<Batch>(`/api/video/batches/${batchId}`);
+}
+
+export async function cancelBatchItem(batchId: string, itemId: string): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(
+    `/api/video/batches/${batchId}/items/${itemId}/cancel`,
+    { method: 'POST' }
+  );
+}
+
+export async function resumeBatchItem(batchId: string, itemId: string): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(
+    `/api/video/batches/${batchId}/items/${itemId}/resume`,
+    { method: 'POST' }
+  );
+}
+
+export async function retryFailedBatchItems(batchId: string): Promise<{ success: boolean; count: number }> {
+  return request<{ success: boolean; count: number }>(
+    `/api/video/batches/${batchId}/retry_failed`,
+    { method: 'POST' }
+  );
 }
 
 // ==================== 管理员 API ====================

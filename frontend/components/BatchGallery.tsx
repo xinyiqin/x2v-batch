@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { Batch, VideoItem } from '../types';
 import { translations, Language } from '../translations';
-import { getBatch, getFileUrl } from '../api';
+import { getBatch, getFileUrl, cancelBatchItem, resumeBatchItem, retryFailedBatchItems } from '../api';
 
 interface BatchGalleryProps {
   batch: Batch;
@@ -14,6 +14,8 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
   const [selectedItem, setSelectedItem] = useState<VideoItem | null>(null);
   const [currentBatch, setCurrentBatch] = useState<Batch>(batch);
   const [isExporting, setIsExporting] = useState(false);
+  const [actionItemIds, setActionItemIds] = useState<string[]>([]);
+  const [isRetryingBatch, setIsRetryingBatch] = useState(false);
   const [videoLoadError, setVideoLoadError] = useState<string | null>(null);
 
   // 当 batch prop 改变时，更新 currentBatch
@@ -119,6 +121,65 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
     setVideoLoadError(null);
   }, [selectedItem?.id]);
 
+  const updateActioning = (itemId: string, isActioning: boolean) => {
+    setActionItemIds((prev) => {
+      if (isActioning) {
+        return prev.includes(itemId) ? prev : [...prev, itemId];
+      }
+      return prev.filter((id) => id !== itemId);
+    });
+  };
+
+  const refreshBatch = async () => {
+    const updatedBatch = await getBatch(currentBatch.id);
+    setCurrentBatch(updatedBatch);
+    if (selectedItem) {
+      const updatedItem = updatedBatch.items.find(item => item.id === selectedItem.id);
+      if (updatedItem) {
+        setSelectedItem(updatedItem);
+      }
+    }
+  };
+
+  const handleCancelItem = async (itemId: string) => {
+    try {
+      updateActioning(itemId, true);
+      await cancelBatchItem(currentBatch.id, itemId);
+      await refreshBatch();
+    } catch (error: any) {
+      console.error('Cancel item failed:', error);
+      alert(error?.message || (lang === 'zh' ? '取消失败' : 'Cancel failed'));
+    } finally {
+      updateActioning(itemId, false);
+    }
+  };
+
+  const handleRetryItem = async (itemId: string) => {
+    try {
+      updateActioning(itemId, true);
+      await resumeBatchItem(currentBatch.id, itemId);
+      await refreshBatch();
+    } catch (error: any) {
+      console.error('Retry item failed:', error);
+      alert(error?.message || (lang === 'zh' ? '重试失败' : 'Retry failed'));
+    } finally {
+      updateActioning(itemId, false);
+    }
+  };
+
+  const handleRetryFailedItems = async () => {
+    try {
+      setIsRetryingBatch(true);
+      await retryFailedBatchItems(currentBatch.id);
+      await refreshBatch();
+    } catch (error: any) {
+      console.error('Retry failed items failed:', error);
+      alert(error?.message || (lang === 'zh' ? '批量重试失败' : 'Batch retry failed'));
+    } finally {
+      setIsRetryingBatch(false);
+    }
+  };
+
   // 轮询更新批次状态
   useEffect(() => {
     const hasProcessing = currentBatch.items.some(
@@ -147,6 +208,15 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
     }
   }, [batch.id, currentBatch.items]);
 
+  const isBatchComplete = currentBatch.items.every(
+    item => item.status === 'completed' || item.status === 'failed' || item.status === 'cancelled'
+  );
+
+  const hasFailedItems = currentBatch.items.some(item => item.status === 'failed');
+  const hasCancelledItems = currentBatch.items.some(item => item.status === 'cancelled');
+  const hasRetryableItems = hasFailedItems || hasCancelledItems;
+  const isSelectedActioning = selectedItem ? actionItemIds.includes(selectedItem.id) : false;
+
   return (
     <div className="space-y-4 md:space-y-8">
       {/* Batch Header Info */}
@@ -162,7 +232,7 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
               {t.videosCount.replace('{count}', currentBatch.imageCount.toString())}
             </span>
-            {currentBatch.creditsUsed !== undefined && currentBatch.creditsUsed > 0 && (
+            {isBatchComplete && currentBatch.creditsUsed !== undefined && currentBatch.creditsUsed > 0 && (
               <span className="flex items-center gap-2 bg-white/[0.08] px-3 py-1.5 rounded-full text-gray-300 border border-white/[0.1]">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
                 {currentBatch.creditsUsed} {t.credits}
@@ -194,6 +264,9 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
                 {currentBatch.progress.failed > 0 && (
                   <span className="text-red-400">❌ {currentBatch.progress.failed} {t.failed || '失败'}</span>
                 )}
+                {(currentBatch.progress.cancelled ?? 0) > 0 && (
+                  <span className="text-gray-400">🚫 {currentBatch.progress.cancelled} {t.cancelled || '已取消'}</span>
+                )}
               </div>
             </div>
           )}
@@ -204,37 +277,67 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
             </p>
           )}
         </div>
-        <button 
-          onClick={handleExportAll}
-          disabled={isExporting || currentBatch.items.filter(item => item.status === 'completed' && item.videoUrl).length === 0}
-          className="w-full md:w-auto flex items-center justify-center gap-2.5 text-white px-5 md:px-7 py-3 md:py-3.5 rounded-xl md:rounded-2xl font-medium transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
-          style={{ 
-            background: (isExporting || currentBatch.items.filter(item => item.status === 'completed' && item.videoUrl).length === 0) 
-              ? 'rgba(144, 220, 225, 0.3)' 
-              : 'linear-gradient(135deg, #90dce1 0%, #6fc4cc 100%)',
-            boxShadow: '0 10px 30px rgba(144, 220, 225, 0.2)'
-          }}
-        >
-          {isExporting ? (
-            <>
-              <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              {t.exporting || '导出中...'}
-            </>
-          ) : (
-            <>
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-          {t.exportAll}
-            </>
-          )}
-        </button>
+        <div className="w-full md:w-auto flex flex-col md:flex-row gap-3">
+          <button
+            onClick={handleRetryFailedItems}
+            disabled={isRetryingBatch || !hasRetryableItems}
+            className="w-full md:w-auto flex items-center justify-center gap-2.5 text-white px-5 md:px-7 py-3 md:py-3.5 rounded-xl md:rounded-2xl font-medium transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
+            style={{
+              background: (isRetryingBatch || !hasRetryableItems)
+                ? 'rgba(255, 159, 10, 0.3)'
+                : 'linear-gradient(135deg, #ffb84d 0%, #ff8c1a 100%)',
+              boxShadow: '0 10px 30px rgba(255, 159, 10, 0.2)',
+            }}
+          >
+            {isRetryingBatch ? (
+              <>
+                <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                {t.retrying || '重试中...'}
+              </>
+            ) : (
+              <>
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 3 3 9 9 9"/></svg>
+                {t.retryFailed || '重试失败任务'}
+              </>
+            )}
+          </button>
+          <button
+            onClick={handleExportAll}
+            disabled={isExporting || currentBatch.items.filter(item => item.status === 'completed' && item.videoUrl).length === 0}
+            className="w-full md:w-auto flex items-center justify-center gap-2.5 text-white px-5 md:px-7 py-3 md:py-3.5 rounded-xl md:rounded-2xl font-medium transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
+            style={{
+              background: (isExporting || currentBatch.items.filter(item => item.status === 'completed' && item.videoUrl).length === 0)
+                ? 'rgba(144, 220, 225, 0.3)'
+                : 'linear-gradient(135deg, #90dce1 0%, #6fc4cc 100%)',
+              boxShadow: '0 10px 30px rgba(144, 220, 225, 0.2)',
+            }}
+          >
+            {isExporting ? (
+              <>
+                <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                {t.exporting || '导出中...'}
+              </>
+            ) : (
+              <>
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                {t.exportAll}
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Waterfall / Grid Display */}
       <div className="columns-1 sm:columns-2 md:columns-3 lg:columns-4 gap-3 md:gap-4 space-y-3 md:space-y-4">
-        {currentBatch.items.map((item) => (
+        {currentBatch.items.map((item) => {
+          const isActioning = actionItemIds.includes(item.id);
+          return (
           <div 
             key={item.id} 
             className="break-inside-avoid relative group cursor-pointer overflow-hidden rounded-3xl bg-white/[0.04] backdrop-blur-xl border border-white/[0.08] hover:border-[#90dce1]/40 transition-all duration-300 hover:shadow-2xl mb-4"
@@ -337,15 +440,49 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
                     <p className="text-sm font-medium" style={{ color: '#90dce1' }}>{t.processing || 'Processing...'}</p>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCancelItem(item.id);
+                      }}
+                      disabled={isActioning}
+                      className="mt-3 px-3 py-1.5 text-xs font-medium rounded-lg text-white bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {t.cancel || '取消'}
+                    </button>
                   </div>
                 ) : item.status === 'failed' ? (
                   <div className="text-center text-red-400">
                     <p className="text-xs font-semibold">❌ {t.failed || 'Failed'}</p>
                     {item.error_msg && <p className="text-[10px] mt-1 text-red-300">{item.error_msg}</p>}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRetryItem(item.id);
+                      }}
+                      disabled={isActioning}
+                      className="mt-3 px-3 py-1.5 text-xs font-medium rounded-lg text-white bg-amber-500/80 hover:bg-amber-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {t.retry || '重试'}
+                    </button>
+                  </div>
+                ) : item.status === 'cancelled' ? (
+                  <div className="text-center text-gray-400">
+                    <p className="text-xs">🚫 {t.cancelled || 'Cancelled'}</p>
                   </div>
                 ) : (
                   <div className="text-center text-gray-400">
                     <p className="text-xs">⏸️ {t.pending || 'Pending'}</p>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCancelItem(item.id);
+                      }}
+                      disabled={isActioning}
+                      className="mt-3 px-3 py-1.5 text-xs font-medium rounded-lg text-white bg-white/10 hover:bg-white/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {t.cancel || '取消'}
+                    </button>
                   </div>
                 )}
             </div>
@@ -356,7 +493,8 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
                <p className="text-[10px] font-mono" style={{ color: '#90dce1' }}>ID: {item.id.split('-').pop()}</p>
             </div>
           </div>
-        ))}
+        );
+        })}
       </div>
 
       {/* Video Modal */}
@@ -412,6 +550,11 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
                         <p className="text-white font-semibold mb-2 text-red-400">生成失败</p>
                         <p className="text-sm text-red-300">{selectedItem.error_msg || '视频生成失败'}</p>
                       </>
+                    ) : selectedItem.status === 'cancelled' ? (
+                      <>
+                        <p className="text-white font-semibold mb-2 text-gray-400">任务已取消</p>
+                        <p className="text-sm" style={{ color: '#90dce1' }}>已停止生成，不会扣除积分</p>
+                      </>
                     ) : (
                       <>
                         <p className="text-white font-semibold mb-2">等待处理</p>
@@ -429,10 +572,34 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
                    <h3 className="text-white font-semibold">{t.videoPreview}</h3>
                    <p className="text-xs text-gray-400 mt-1">Item ID: {selectedItem.id}</p>
                  </div>
-                 <div className="flex gap-3">
+                <div className="flex gap-3">
                    <button className="p-3 bg-white/[0.08] hover:bg-white/[0.12] rounded-xl transition-all duration-200 border border-white/[0.1]">
                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                    </button>
+                  {selectedItem.status === 'failed' && (
+                    <button
+                      onClick={() => handleRetryItem(selectedItem.id)}
+                      disabled={isSelectedActioning}
+                      className="px-4 py-2.5 text-white font-semibold rounded-xl transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
+                      style={{
+                        background: isSelectedActioning
+                          ? 'rgba(255, 159, 10, 0.3)'
+                          : 'linear-gradient(135deg, #ffb84d 0%, #ff8c1a 100%)',
+                        boxShadow: '0 8px 20px rgba(255, 159, 10, 0.2)',
+                      }}
+                    >
+                      {t.retry || '重试'}
+                    </button>
+                  )}
+                  {(selectedItem.status === 'pending' || selectedItem.status === 'processing') && (
+                    <button
+                      onClick={() => handleCancelItem(selectedItem.id)}
+                      disabled={isSelectedActioning}
+                      className="px-4 py-2.5 text-white font-semibold rounded-xl transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg hover:shadow-xl bg-white/10 hover:bg-white/20"
+                    >
+                      {t.cancel || '取消'}
+                    </button>
+                  )}
                    <button 
                      onClick={() => selectedItem && selectedItem.videoUrl && handleDownloadVideo(selectedItem.videoUrl, selectedItem.id)}
                      disabled={!selectedItem || !selectedItem.videoUrl || selectedItem.status !== 'completed'}

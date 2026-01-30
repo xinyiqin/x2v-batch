@@ -13,12 +13,9 @@ def web_search(
     query: str,
     num_results: int = 5,
     timeout_seconds: int = 20,
-    save_path: Optional[str] = None,
-    tool_agent=None
+    region: str = "us-en",  # Default to US English
+    safesearch: str = "moderate",
 ) -> Dict[str, Any]:
-
-    work_dir = tool_agent.file_system_path if tool_agent and tool_agent.file_system_path else os.environ['FILE_SYSTEM_PATH']
-    os.chdir(work_dir)
 
     if not query or not isinstance(query, str) or not query.strip():
         return {
@@ -32,17 +29,36 @@ def web_search(
 
     # Try DuckDuckGo first
     try:
-        print("🔍 Trying DuckDuckGo search...")
+        print(f"🔍 Trying DuckDuckGo search (region: {region})...")
         search_results = []
         with DDGS(timeout=float(timeout_seconds)) as ddgs:
-            for i, item in enumerate(ddgs.text(keywords=query, max_results=num_results)):
+            # Use text() with region and safesearch parameters
+            for i, item in enumerate(ddgs.text(
+                keywords=query, 
+                max_results=num_results,
+                region=region,
+                safesearch=safesearch
+            )):
                 if i >= num_results:
                     break
+                # Filter out low-quality results
+                title = str(item.get("title", "N/A"))
+                body = str(item.get("body", "N/A"))
+                href = str(item.get("href", "#"))
+                
+                # Skip if title or body is too short or seems irrelevant
+                if len(title) < 5 or len(body) < 20:
+                    continue
+                    
                 search_results.append({
-                    "title": str(item.get("title", "N/A")),
-                    "snippet": str(item.get("body", "N/A")),
-                    "link": str(item.get("href", "#"))
+                    "title": title,
+                    "snippet": body,
+                    "link": href
                 })
+                
+                # Stop if we have enough results
+                if len(search_results) >= num_results:
+                    break
 
         result = {
             "status": "success",
@@ -75,7 +91,10 @@ def web_search(
             }
             params = {
                 "q": query,
-                "count": num_results
+                "count": num_results,
+                "search_lang": "en",  # Force English results
+                "country": "us",  # US region
+                "safesearch": "moderate"
             }
             response = requests.get(
                 "https://api.search.brave.com/res/v1/web/search",
@@ -86,11 +105,24 @@ def web_search(
             response.raise_for_status()
 
             raw_results = response.json().get("web", {}).get("results", [])
-            search_results = [{
-                "title": r.get("title", "N/A"),
-                "snippet": r.get("description", "N/A"),
-                "link": r.get("url", "#")
-            } for r in raw_results]
+            search_results = []
+            for r in raw_results:
+                title = r.get("title", "N/A")
+                description = r.get("description", "N/A")
+                url = r.get("url", "#")
+                
+                # Filter out low-quality results
+                if len(title) < 5 or len(description) < 20:
+                    continue
+                    
+                search_results.append({
+                    "title": title,
+                    "snippet": description,
+                    "link": url
+                })
+                
+                if len(search_results) >= num_results:
+                    break
 
             result = {
                 "status": "success",
@@ -113,22 +145,11 @@ def web_search(
                 }
             }
 
-    # 保存结果
-    if save_path:
-        try:
-            os.makedirs(os.path.dirname(save_path) or '.', exist_ok=True)
-            with open(save_path, "w", encoding="utf-8") as f:
-                json.dump(result, f, indent=2, ensure_ascii=False)
-            result.setdefault("data", {})["saved_to"] = save_path
-        except Exception as se:
-            result["status"] = "partial_success"
-            result["warning"] = f"Search succeeded, but failed to save to file: {se}"
-
     return result
 
 if __name__ == "__main__":
     response = web_search(
-        "recent updates on United States economy", 
+        "United States economy", 
         num_results=5,
         # save_path="./search/search_results.json"
         )

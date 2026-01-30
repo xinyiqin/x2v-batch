@@ -30,6 +30,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ users, batches, onUpdate
   const nonAdminBatchesCount = nonAdminBatches.length;
   const nonAdminVideosCount = nonAdminBatches.reduce((sum, batch) => sum + (batch.imageCount || 0), 0);
 
+  const isBatchComplete = (batch: Batch) =>
+    batch.items.every(item => item.status === 'completed' || item.status === 'failed' || item.status === 'cancelled');
+
 
   const startEditing = (user: User) => {
     setEditingUserId(user.id);
@@ -197,7 +200,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ users, batches, onUpdate
                   <td className="px-8 py-5 text-gray-300">{batch.name}</td>
                   <td className="px-8 py-5 text-gray-300 font-mono">{batch.imageCount}</td>
                   <td className="px-8 py-5 text-gray-300">
-                    {batch.creditsUsed !== undefined && batch.creditsUsed > 0 ? (
+                    {isBatchComplete(batch) && batch.creditsUsed !== undefined && batch.creditsUsed > 0 ? (
                       <span className="font-mono">{batch.creditsUsed} {t.credits}</span>
                     ) : (
                       <span className="text-gray-500">-</span>
