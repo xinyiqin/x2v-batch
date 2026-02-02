@@ -58,8 +58,8 @@ const App: React.FC = () => {
 
     checkStatus();
 
-    // 每30秒检查一次
-    const interval = setInterval(checkStatus, 30000);
+    // 每 10 分钟检查一次
+    const interval = setInterval(checkStatus, 10 * 60 * 1000);
 
     // 监听 token 更新事件
     const handleTokenUpdated = () => {

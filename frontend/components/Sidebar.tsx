@@ -75,15 +75,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
       fixed md:static inset-y-0 left-0 z-50
       w-64 md:w-72 
       border-r border-white/[0.06] 
-      flex flex-col 
+      flex flex-col min-h-screen md:min-h-0 md:h-full
       bg-black/95 md:bg-black/40 
       backdrop-blur-2xl 
       shrink-0
       transform transition-transform duration-300 ease-in-out
       ${isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
     `}>
-      <div className="p-4 md:p-6">
-        <div className="flex items-center justify-between mb-6 md:mb-10">
+      <div className="flex-1 flex flex-col min-h-0 p-4 md:p-6">
+        <div className="flex-shrink-0 flex items-center justify-between mb-6 md:mb-10">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-lg" style={{ background: 'linear-gradient(135deg, #90dce1 0%, #6fc4cc 100%)', color: '#000' }}>V</div>
             <span className="text-xl font-semibold tracking-tight text-white hidden md:inline">{t.brand}</span>
@@ -135,7 +135,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {isAdmin && (
           <button 
             onClick={onOpenAdmin}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl mb-6 transition-all duration-200 ${
+            className={`flex-shrink-0 w-full flex items-center gap-3 px-4 py-3 rounded-2xl mb-6 transition-all duration-200 ${
               currentView === 'admin' 
               ? 'bg-[#90dce1]/20 text-[#90dce1] border border-[#90dce1]/30 shadow-lg shadow-[#90dce1]/10' 
               : 'bg-white/[0.06] text-gray-400 border border-white/[0.08] hover:bg-white/[0.1] hover:text-white hover:border-white/[0.15]'
@@ -147,14 +147,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
 
         {/* Balance Card - hidden on mobile (shown in top bar) */}
-        <div className="hidden md:block bg-gradient-to-br from-[#90dce1]/15 to-[#6fc4cc]/10 border border-[#90dce1]/20 rounded-3xl p-5 mb-8 backdrop-blur-xl">
+        <div className="flex-shrink-0 hidden md:block bg-gradient-to-br from-[#90dce1]/15 to-[#6fc4cc]/10 border border-[#90dce1]/20 rounded-3xl p-5 mb-8 backdrop-blur-xl">
            <p className="text-[11px] text-gray-400 uppercase font-medium tracking-wider mb-2">{t.balance}</p>
            <div className="text-3xl font-bold text-white tracking-tight">{credits} <span className="text-sm font-normal text-gray-400 ml-1">{t.credits}</span></div>
         </div>
         
         <button 
           onClick={onNewProject}
-          className={`w-full flex items-center justify-center gap-2.5 font-medium py-3.5 px-4 rounded-2xl transition-all duration-200 mb-8 ${
+          className={`flex-shrink-0 w-full flex items-center justify-center gap-2.5 font-medium py-3.5 px-4 rounded-2xl transition-all duration-200 mb-4 ${
             currentView === 'create' 
             ? 'bg-white text-black shadow-lg shadow-white/10' 
             : 'bg-white/[0.08] text-white hover:bg-white/[0.12] border border-white/[0.1] hover:border-white/[0.2]'
@@ -164,11 +164,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {t.newBatch}
         </button>
 
-        <div className="space-y-2">
-          {/* History Header - Collapsible on mobile */}
+        {/* 任务列表：占满剩余空间并单独滚动，不覆盖底部用户卡片 */}
+        <div className="flex-1 flex flex-col min-h-0 space-y-2">
           <button
             onClick={() => setHistoryExpanded(!historyExpanded)}
-            className="md:pointer-events-none w-full flex items-center justify-between px-3 text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-3 hover:text-gray-400 transition-colors"
+            className="flex-shrink-0 md:pointer-events-none w-full flex items-center justify-between px-3 text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-3 hover:text-gray-400 transition-colors"
           >
             <span>{t.history}</span>
             <svg 
@@ -184,9 +184,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <polyline points="6 9 12 15 18 9"/>
             </svg>
           </button>
-          <div className={`overflow-hidden transition-all duration-300 md:max-h-[calc(100vh-420px)] ${historyExpanded ? 'max-h-[calc(100vh-420px)]' : 'max-h-0 md:max-h-[calc(100vh-420px)]'}`}>
+          <div className={`flex-1 min-h-0 flex flex-col overflow-hidden transition-all duration-300 ${historyExpanded ? '' : 'max-h-0 md:max-h-none'}`}>
             <div 
-              className="overflow-y-auto pr-2 -mr-2 space-y-1.5 max-h-[calc(100vh-420px)] custom-scrollbar"
+              className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-2 -mr-2 space-y-1.5 custom-scrollbar"
               style={{
                 scrollbarWidth: 'thin',
                 scrollbarColor: 'rgba(156, 163, 175, 0.5) transparent'
@@ -195,7 +195,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {batches.length === 0 ? (
               <p className="px-3 text-sm text-gray-500 italic">{t.noBatches}</p>
             ) : (
-              // 按时间戳排序，最新的在最上面（timestamp 越大越新）
               [...batches].sort((a, b) => b.timestamp - a.timestamp).map(batch => (
                 <button
                   key={batch.id}
@@ -225,7 +224,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      <div className="mt-auto p-5 border-t border-white/[0.06] bg-black/20 backdrop-blur-xl">
+      <div className="flex-shrink-0 mt-auto p-5 border-t border-white/[0.06] bg-black/20 backdrop-blur-xl">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-3 overflow-hidden">
             <img src={`https://api.dicebear.com/7.x/initials/svg?seed=${username}`} alt="Avatar" className="w-10 h-10 rounded-full bg-white/[0.1] border border-white/[0.1]" />
