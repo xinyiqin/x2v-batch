@@ -525,10 +525,10 @@ async def create_batch(
             )
 
     await asyncio.gather(*[submit_one(i, item) for i, item in enumerate(batch.items)])
-    await task_manager.save_batch(batch.id)
 
-    # 后台轮询状态（不存 result_url，前端用 result_url 接口按需取）
+    # 先启动轮询（只读内存），再持久化；S3 不必在 process_batch 之前完成
     asyncio.create_task(batch_processor.process_batch(batch.id))
+    asyncio.create_task(task_manager.save_batch(batch.id))
     return {"batch_id": batch.id}
 
 
