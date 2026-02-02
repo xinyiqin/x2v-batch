@@ -90,16 +90,32 @@ export const BatchForm: React.FC<BatchFormProps> = ({ onCreated, lang, userCredi
     setIsGenerating(true);
 
     try {
-      const { createBatch, getBatch } = await import('../api');
-      
-      // 提交批次
+      const { createBatch } = await import('../api');
+
       const response = await createBatch(images, audio, prompt.trim() || "");
-      
-      // 获取批次详情
-      const batch = await getBatch(response.batch_id);
-      
-      onCreated(batch);
-      
+
+      // 先跳转到详情，不等待 getBatch；用最小 batch 对象让 App 切到 gallery，详情由 App 后台拉取
+      const minimalBatch: Batch = {
+        id: response.batch_id,
+        userId: '',
+        userName: '',
+        name: '新建批次',
+        timestamp: Date.now(),
+        prompt: prompt.trim() || '',
+        audioName: '',
+        imageCount: images.length,
+        items: [],
+        progress: {
+          overall_progress: 0,
+          total: images.length,
+          completed: 0,
+          processing: 0,
+          pending: images.length,
+          failed: 0,
+        },
+      };
+      onCreated(minimalBatch);
+
       setImages([]);
       setAudio(null);
       if (audioUrl) URL.revokeObjectURL(audioUrl);

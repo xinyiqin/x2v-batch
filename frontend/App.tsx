@@ -8,7 +8,7 @@ import { Login } from './components/Login';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
 import { Batch, ViewState, User } from './types';
 import { translations, Language } from './translations';
-import { getToken, clearToken, getProfile, getBatches, getAllUsers, getAllBatches, checkTokenStatus } from './api';
+import { getToken, clearToken, getProfile, getBatches, getBatch, getAllUsers, getAllBatches, checkTokenStatus } from './api';
 
 const App: React.FC = () => {
   const [activeUser, setActiveUser] = useState<User | null>(null);
@@ -119,12 +119,18 @@ const App: React.FC = () => {
 
   const handleCreateBatch = useCallback((newBatch: Batch) => {
     if (!activeUser) return;
-    
+
     setBatches(prev => [newBatch, ...prev]);
     setSelectedBatchId(newBatch.id);
     setCurrentViewState('gallery');
-    
-    // 刷新用户信息以更新点数
+
+    // 后台拉取完整批次详情（提交后已直接跳转，不阻塞）
+    getBatch(newBatch.id)
+      .then((fullBatch: Batch) => {
+        setBatches(prev => prev.map(b => (b.id === fullBatch.id ? fullBatch : b)));
+      })
+      .catch(console.error);
+
     getProfile()
       .then(user => setActiveUser(user))
       .catch(console.error);
@@ -263,8 +269,8 @@ const App: React.FC = () => {
         lang={lang}
       />
 
-      {/* Main Content Area */}
-      <main className="flex-1 overflow-y-auto bg-black">
+      {/* Main Content Area - min-h-0 让 Safari 正确计算 flex 子项高度和滚动区域 */}
+      <main className="flex-1 min-h-0 overflow-y-auto bg-black">
         {/* Mobile Top Bar */}
         <div className="md:hidden sticky top-0 z-30 bg-black/80 backdrop-blur-xl border-b border-white/[0.06] px-4 py-3">
           <div className="flex items-center justify-between">

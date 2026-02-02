@@ -205,6 +205,7 @@ export interface VideoItem {
   id: string;
   sourceImage: string;
   videoUrl: string;
+  api_task_id?: string;
   status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
   error_msg?: string;
 }
@@ -411,31 +412,54 @@ export function getFileUrl(filenameOrPath: string, subdir: string = 'images'): s
   if (!filenameOrPath) {
     return '';
   }
-  
-  // 如果已经是完整 URL，直接返回
+  // 已经是完整 URL
   if (filenameOrPath.startsWith('http://') || filenameOrPath.startsWith('https://')) {
     return filenameOrPath;
   }
-  
-  // 如果已经是相对路径（以 /api/files 开头），需要编码文件名部分
+  // 新格式：input_url 代理路径，返回 JSON { url }，不能直接做 img src，由调用方用 fetchResolvedUrl 取真实 URL
+  if (filenameOrPath.startsWith('/api/video/')) {
+    return `${API_BASE}${filenameOrPath}`;
+  }
+  // 相对路径 /api/files/...
   if (filenameOrPath.startsWith('/api/files/')) {
-    // 提取路径和文件名
     const parts = filenameOrPath.split('/');
     if (parts.length >= 4) {
-      // /api/files/subdir/filename
       const subdirPart = parts[3];
-      const filename = parts.slice(4).join('/'); // 处理可能包含 / 的文件名
-      // 只编码文件名部分，不编码路径部分
-      const encodedFilename = encodeURIComponent(filename);
-      return `${API_BASE}/api/files/${subdirPart}/${encodedFilename}`;
+      const filename = parts.slice(4).join('/');
+      return `${API_BASE}/api/files/${subdirPart}/${encodeURIComponent(filename)}`;
     }
     return `${API_BASE}${filenameOrPath}`;
   }
-  
-  // 否则，假设是文件名，构建完整路径并编码文件名
-  // 对文件名进行 URL 编码，处理空格和特殊字符
-  const encodedFilename = encodeURIComponent(filenameOrPath);
-  return `${API_BASE}/api/files/${subdir}/${encodedFilename}`;
+  // 旧格式：纯文件名，走 /api/files/subdir/filename
+  return `${API_BASE}/api/files/${subdir}/${encodeURIComponent(filenameOrPath)}`;
+}
+
+/** 是否为 input_url/result_url 的 API 路径（需先 fetch 取 .url 再用于 src） */
+export function isProxyMediaPath(path: string): boolean {
+  return !!path && path.startsWith('/api/video/');
+}
+
+/** 请求代理接口得到真实媒体 URL（input_url 或 result_url 返回 { url }） */
+export async function fetchResolvedUrl(apiPath: string): Promise<string> {
+  const token = getToken();
+  const url = apiPath.startsWith('http') ? apiPath : `${API_BASE}${apiPath}`;
+  const res = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`Failed to resolve media URL: ${res.status}`);
+  const data = await res.json();
+  if (typeof data?.url !== 'string') throw new Error('Invalid response: missing url');
+  return data.url;
+}
+
+/** 获取 item 输入图 API 路径（input_url），用于按需 fetch 得到真实图片 URL */
+export function getItemInputImageApiPath(batchId: string, itemId: string): string {
+  return `/api/video/batches/${batchId}/items/${itemId}/input_url?name=input_image`;
+}
+
+/** 获取 item 结果视频 API 路径（result_url），用于按需 fetch 得到真实视频 URL */
+export function getItemResultVideoApiPath(batchId: string, itemId: string): string {
+  return `/api/video/batches/${batchId}/items/${itemId}/result_url?name=output_video`;
 }
 
 // 检查 S2V API token 状态

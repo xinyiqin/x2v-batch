@@ -1,6 +1,7 @@
 """
 主应用文件 - FastAPI 服务器
 """
+import base64
 import os
 import asyncio
 import json
@@ -8,7 +9,7 @@ import zipfile
 import tempfile
 import math
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from io import BytesIO
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, status
@@ -28,8 +29,9 @@ except ImportError:
 
 from server.auth import AuthManager
 from server.data_manager import LocalDataManager
-from server.task_manager import TaskManager
+from server.task_manager import TaskManager, VideoItemStatus
 from server.batch_processor import BatchProcessor
+from server import lightx2v_api
 
 # 延迟导入 S3DataManager，只在需要时导入
 S3DataManager = None
@@ -430,73 +432,106 @@ async def create_batch(
     prompt: str = Form(""),
     user: dict = Depends(get_current_user),
 ):
-    """创建批次任务"""
+    """创建批次任务：读入内存后立即提交到 LightX2V，每个 item 记录 task_id；媒体不落 S3，仅用 result_url/input_url 按需取。"""
     if len(images) == 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="At least one image is required"
         )
-    
     if len(images) > 50:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Maximum 50 images allowed"
         )
-    
-    # 检查用户灵感值
+
     user_info = auth_manager.get_user_by_id(user["user_id"])
     if not user_info:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
-    # 保存音频文件并获取音频时长
+
+    # 读入内存，不写 S3
     audio_data = await audio.read()
-    audio_filename = f"{user['user_id']}_{audio.filename}"
-    await data_manager.save_audio(audio_data, audio_filename)
-    
-    # 计算音频时长（秒）
     audio_duration = await get_audio_duration(audio_data)
-    
-    # 计算灵感值：≤30s = 1灵感值/视频，>30s = ceil(时长/30)灵感值/视频
     credits_per_video = 1 if audio_duration <= 30 else math.ceil(audio_duration / 30)
     required_credits = credits_per_video * len(images)
-    
     if user_info["credits"] < required_credits:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Insufficient credits. Required: {required_credits} (audio: {audio_duration:.1f}s, {credits_per_video} credits/video × {len(images)} videos), Available: {user_info['credits']}"
         )
-    
-    # 并发保存所有图片文件以提高速度
-    async def save_single_image(img: UploadFile) -> str:
-        """保存单张图片并返回文件名"""
-        img_data = await img.read()
-        img_filename = f"{user['user_id']}_{img.filename}"
-        await data_manager.save_image(img_data, img_filename)
-        return img_filename
-    
-    # 使用 asyncio.gather 并发上传所有图片
-    image_filenames = await asyncio.gather(*[save_single_image(img) for img in images])
-    
-    # 创建批次（记录每个视频的积分）
+
+    async def read_image(img: UploadFile) -> tuple[bytes, str]:
+        data = await img.read()
+        return data, img.filename or "image.png"
+    image_list = await asyncio.gather(*[read_image(img) for img in images])
+    image_datas = [x[0] for x in image_list]
+    image_filenames = [x[1] for x in image_list]
+
+    audio_b64 = base64.b64encode(audio_data).decode("utf-8")
+    audio_filename = audio.filename or "audio.wav"
+
+    # 先创建批次（仅 display 用文件名，不存媒体）
     batch_name = f"批次 {user_info['username']} {asyncio.get_event_loop().time()}"
     batch = await task_manager.create_batch(
         user_id=user["user_id"],
         user_name=user_info["username"],
         name=batch_name,
-        prompt=prompt,
+        prompt=prompt or "根据音频生成对应视频",
         audio_filename=audio_filename,
         image_filenames=image_filenames,
         credits_used=0,
         credits_per_video=credits_per_video,
     )
-    
-    # 异步处理批次
+
+    base_url = S2V_BASE_URL
+    token = batch_processor.access_token
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="LightX2V token not configured",
+        )
+
+    # 并发提交所有任务，拿到 task_id 写入 item（避免串行提交导致 45s+ 延迟）
+    prompt_text = batch.prompt or "根据音频生成对应视频"
+
+    async def submit_one(i: int, item: Any):
+        image_b64 = base64.b64encode(image_datas[i]).decode("utf-8")
+        submit_out = await lightx2v_api.submit_task(
+            base_url=base_url,
+            access_token=token,
+            prompt=prompt_text,
+            input_image={"type": "base64", "data": image_b64},
+            input_audio={"type": "base64", "data": audio_b64},
+        )
+        if not submit_out.get("success"):
+            err = submit_out.get("error", "Unknown error")
+            await task_manager.update_video_item(
+                batch_id=batch.id,
+                item_id=item.id,
+                status=VideoItemStatus.PENDING,
+                error_msg=f"Submit failed: {err}",
+            )
+            return
+        api_task_id = submit_out.get("task_id")
+        if api_task_id:
+            await task_manager.update_video_item(
+                batch_id=batch.id,
+                item_id=item.id,
+                api_task_id=api_task_id,
+            )
+
+    await asyncio.gather(*[submit_one(i, item) for i, item in enumerate(batch.items)])
+
+    # 后台轮询状态（不存 result_url，前端用 result_url 接口按需取）
     asyncio.create_task(batch_processor.process_batch(batch.id))
-    
     return {"batch_id": batch.id}
+
+
+def _item_input_url_path(batch_id: str, item_id: str, name: str = "input_image") -> str:
+    """返回前端可调用的 input_url 代理路径（缩略图等）。"""
+    return f"/api/video/batches/{batch_id}/items/{item_id}/input_url?name={name}"
 
 
 @app.get("/api/video/batches")
@@ -505,19 +540,16 @@ async def get_batches(
     offset: int = 0,
     user: dict = Depends(get_current_user),
 ):
-    """获取当前用户的批次列表"""
+    """获取当前用户的批次列表。sourceImage 为 input_url 代理路径，按 task_id 从后端取图。"""
     batches = task_manager.get_user_batches(user["user_id"], limit=limit, offset=offset)
-    
-    # 为每个批次添加文件 URL
     result = []
     for batch in batches:
         batch_dict = batch.to_dict()
-        # 转换 items 中的 sourceImage 为 URL
         for item in batch_dict["items"]:
-            if item["sourceImage"]:
-                item["sourceImage"] = await data_manager.get_url(item["sourceImage"], "images")
+            if item.get("api_task_id"):
+                item["sourceImage"] = _item_input_url_path(batch.id, item["id"], "input_image")
+            # 否则保留 display 用 sourceImage 或空
         result.append(batch_dict)
-    
     return {"batches": result, "total": len(result)}
 
 
@@ -526,28 +558,75 @@ async def get_batch(
     batch_id: str,
     user: dict = Depends(get_current_user),
 ):
-    """获取特定批次的详细信息"""
+    """获取特定批次的详细信息。sourceImage 为 input_url 代理路径。"""
     batch = task_manager.get_batch(batch_id)
     if not batch:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Batch not found"
         )
-    
-    # 检查权限
     if batch.user_id != user["user_id"] and not user.get("is_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied"
         )
-    
     batch_dict = batch.to_dict()
-    # 转换 items 中的 sourceImage 为 URL
     for item in batch_dict["items"]:
-        if item["sourceImage"]:
-            item["sourceImage"] = await data_manager.get_url(item["sourceImage"], "images")
-    
+        if item.get("api_task_id"):
+            item["sourceImage"] = _item_input_url_path(batch_id, item["id"], "input_image")
     return batch_dict
+
+
+@app.get("/api/video/batches/{batch_id}/items/{item_id}/result_url")
+async def get_item_result_url(
+    batch_id: str,
+    item_id: str,
+    name: str = "output_video",
+    user: dict = Depends(get_current_user),
+):
+    """代理 LightX2V result_url，按需取结果 URL（不存 CDN URL 防过期）。"""
+    batch = task_manager.get_batch(batch_id)
+    if not batch or (batch.user_id != user["user_id"] and not user.get("is_admin")):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
+    item = task_manager.get_video_item(batch_id, item_id)
+    if not item or not item.api_task_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item or task_id not found")
+    url = await lightx2v_api.get_result_url(
+        S2V_BASE_URL,
+        batch_processor.access_token,
+        item.api_task_id,
+        name=name,
+    )
+    if not url:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to get result URL")
+    return {"url": url}
+
+
+@app.get("/api/video/batches/{batch_id}/items/{item_id}/input_url")
+async def get_item_input_url(
+    batch_id: str,
+    item_id: str,
+    name: str = "input_image",
+    filename: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    """代理 LightX2V input_url，用于缩略图等。"""
+    batch = task_manager.get_batch(batch_id)
+    if not batch or (batch.user_id != user["user_id"] and not user.get("is_admin")):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
+    item = task_manager.get_video_item(batch_id, item_id)
+    if not item or not item.api_task_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item or task_id not found")
+    url = await lightx2v_api.get_input_url(
+        S2V_BASE_URL,
+        batch_processor.access_token,
+        item.api_task_id,
+        name=name,
+        filename=filename,
+    )
+    if not url:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to get input URL")
+    return {"url": url}
 
 
 @app.post("/api/video/batches/{batch_id}/items/{item_id}/cancel")
@@ -670,77 +749,54 @@ async def export_batch_videos(
     batch_id: str,
     user: dict = Depends(get_current_user),
 ):
-    """获取批次的所有已完成视频下载清单（用于前端批量下载）"""
-    from server.task_manager import VideoItemStatus
-    
+    """获取批次已完成视频下载清单：通过 result_url 接口取最新 URL（不存 CDN 防过期）。"""
     batch = task_manager.get_batch(batch_id)
     if not batch:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Batch not found"
         )
-    
-    # 检查权限
     if batch.user_id != user["user_id"] and not user.get("is_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied"
         )
-    
-    # 获取所有已完成的视频项（检查 video_url 或 video_filename）
+
     completed_items = [
-        item for item in batch.items 
-        if item.status == VideoItemStatus.COMPLETED and (item.video_url or item.video_filename)
+        item for item in batch.items
+        if item.status == VideoItemStatus.COMPLETED and item.api_task_id
     ]
-    
     if not completed_items:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No completed videos to export"
         )
-    
-    # 构建文件下载清单（前端直接批量下载，不打包）
+
     files = []
     for item in completed_items:
-        # 优先使用 video_url（CDN 链接）
-        if item.video_url:
-            # 从 URL 提取文件名，或使用 item_id
-            url_path = item.video_url.split('?')[0]  # 移除查询参数
-            url_filename = os.path.basename(url_path)
-            # 如果 URL 中没有文件名或文件名无效，使用 item_id
-            if not url_filename or url_filename == url_path or '.' not in url_filename:
-                url_filename = f"{item.id}.mp4"
-            # 确保文件名安全（保留扩展名，移除特殊字符）
-            name_part, ext = os.path.splitext(url_filename)
-            safe_name = "".join(c for c in name_part if c.isalnum() or c in ('-', '_')).strip()
-            if not safe_name:
-                safe_name = item.id
-            safe_filename = f"{safe_name}{ext}" if ext else f"{safe_name}.mp4"
-            
-            files.append({
-                "name": safe_filename,
-                "url": item.video_url,
-                "id": item.id
-            })
-        elif item.video_filename:
-            # 如果有 video_filename，构建后端文件 URL（使用相对路径，前端会自动补全）
-            from urllib.parse import quote
-            encoded_filename = quote(item.video_filename.encode('utf-8'))
-            file_url = f"/api/files/videos/{encoded_filename}"
-            
-            files.append({
-                "name": item.video_filename,
-                "url": file_url,
-                "id": item.id
-            })
-    
+        url = await lightx2v_api.get_result_url(
+            S2V_BASE_URL,
+            batch_processor.access_token,
+            item.api_task_id,
+            name="output_video",
+        )
+        if not url:
+            continue
+        url_path = url.split("?")[0]
+        url_filename = os.path.basename(url_path)
+        if not url_filename or "." not in url_filename:
+            url_filename = f"{item.id}.mp4"
+        name_part, ext = os.path.splitext(url_filename)
+        safe_name = "".join(c for c in name_part if c.isalnum() or c in ("-", "_")).strip() or item.id
+        safe_filename = f"{safe_name}{ext}" if ext else f"{safe_name}.mp4"
+        files.append({"name": safe_filename, "url": url, "id": item.id})
+
     logger.info(f"Returning download list for batch {batch_id}: {len(files)} files")
-    
     return {
         "batch_id": batch_id,
         "batch_name": batch.name,
         "files": files,
-        "total": len(files)
+        "total": len(files),
     }
 
 
@@ -873,22 +929,16 @@ async def get_all_batches(
     offset: int = 0,
     admin: dict = Depends(get_current_admin),
 ):
-    """获取所有批次（系统历史）"""
+    """获取所有批次（系统历史）。sourceImage 为 input_url 代理路径。"""
     batches = task_manager.get_all_batches(limit=limit, offset=offset)
     logger.info(f"Admin requested all batches: found {len(batches)} batches")
-    
-    # 为每个批次添加文件 URL
     result = []
     for batch in batches:
         batch_dict = batch.to_dict()
-        # 转换 items 中的 sourceImage 为 URL
         for item in batch_dict.get("items", []):
-            # 兼容旧数据格式：可能是 sourceImage 或 source_image_filename
-            source_image = item.get("sourceImage") or item.get("source_image_filename", "")
-            if source_image:
-                item["sourceImage"] = await data_manager.get_url(source_image, "images")
+            if item.get("api_task_id"):
+                item["sourceImage"] = _item_input_url_path(batch.id, item["id"], "input_image")
         result.append(batch_dict)
-    
     logger.info(f"Returning {len(result)} batches to admin")
     return {"batches": result, "total": len(result)}
 

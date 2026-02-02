@@ -2,11 +2,52 @@
 import React, { useState, useEffect } from 'react';
 import { Batch, VideoItem } from '../types';
 import { translations, Language } from '../translations';
-import { getBatch, getFileUrl, cancelBatchItem, resumeBatchItem, retryFailedBatchItems } from '../api';
+import {
+  getBatch,
+  getFileUrl,
+  cancelBatchItem,
+  resumeBatchItem,
+  retryFailedBatchItems,
+  isProxyMediaPath,
+  fetchResolvedUrl,
+  getItemInputImageApiPath,
+  getItemResultVideoApiPath,
+} from '../api';
 
 interface BatchGalleryProps {
   batch: Batch;
   lang: Language;
+}
+
+/** 当 sourceImage 为 input_url 代理路径时，先 fetch 取真实 URL 再渲染 img */
+function ResolvedImage({
+  batchId,
+  itemId,
+  sourceImage,
+  className,
+  alt,
+  onError,
+  onLoad,
+}: {
+  batchId: string;
+  itemId: string;
+  sourceImage: string;
+  className?: string;
+  alt?: string;
+  onError?: (e: React.SyntheticEvent<HTMLImageElement>) => void;
+  onLoad?: (e: React.SyntheticEvent<HTMLImageElement>) => void;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [err, setErr] = useState(false);
+  useEffect(() => {
+    if (!isProxyMediaPath(sourceImage)) return;
+    setErr(false);
+    fetchResolvedUrl(getItemInputImageApiPath(batchId, itemId))
+      .then(setSrc)
+      .catch(() => setErr(true));
+  }, [batchId, itemId, sourceImage]);
+  if (err || !src) return null;
+  return <img src={src} className={className} alt={alt || ''} onError={onError} onLoad={onLoad} />;
 }
 
 export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
@@ -17,6 +58,8 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
   const [actionItemIds, setActionItemIds] = useState<string[]>([]);
   const [isRetryingBatch, setIsRetryingBatch] = useState(false);
   const [videoLoadError, setVideoLoadError] = useState<string | null>(null);
+  /** 详情弹窗中已完成的 item 通过 result_url 接口取到的视频 URL */
+  const [resolvedVideoUrl, setResolvedVideoUrl] = useState<string | null>(null);
 
   // 当 batch prop 改变时，更新 currentBatch
   useEffect(() => {
@@ -60,10 +103,10 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
     });
   };
 
-  // 批量下载所有已完成的视频（前端直接下载，不经过后端打包）
+  // 批量下载所有已完成的视频（前端直接下载，不经过后端打包；URL 由 export 接口按 result_url 返回）
   const handleExportAll = async () => {
     const completedItems = currentBatch.items.filter(
-      item => item.status === 'completed' && item.videoUrl && item.videoUrl.trim()
+      item => item.status === 'completed' && (item.videoUrl?.trim() || item.api_task_id)
     );
 
     if (completedItems.length === 0) {
@@ -115,6 +158,19 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
       setIsExporting(false);
     }
   };
+
+  // 当选中已完成项时，通过 result_url 接口取视频 URL
+  useEffect(() => {
+    if (!selectedItem || selectedItem.status !== 'completed' || !selectedItem.api_task_id) {
+      setResolvedVideoUrl(null);
+      return;
+    }
+    setResolvedVideoUrl(null);
+    setVideoLoadError(null);
+    fetchResolvedUrl(getItemResultVideoApiPath(currentBatch.id, selectedItem.id))
+      .then(setResolvedVideoUrl)
+      .catch(() => setVideoLoadError('无法获取视频地址'));
+  }, [selectedItem?.id, selectedItem?.status, selectedItem?.api_task_id, currentBatch.id]);
 
   // 当选择新项目时，重置视频加载错误
   useEffect(() => {
@@ -306,10 +362,10 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
           </button>
           <button
             onClick={handleExportAll}
-            disabled={isExporting || currentBatch.items.filter(item => item.status === 'completed' && item.videoUrl).length === 0}
+            disabled={isExporting || currentBatch.items.filter(item => item.status === 'completed' && (item.videoUrl || item.api_task_id)).length === 0}
             className="w-full md:w-auto flex items-center justify-center gap-2.5 text-white px-5 md:px-7 py-3 md:py-3.5 rounded-xl md:rounded-2xl font-medium transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
             style={{
-              background: (isExporting || currentBatch.items.filter(item => item.status === 'completed' && item.videoUrl).length === 0)
+              background: (isExporting || currentBatch.items.filter(item => item.status === 'completed' && (item.videoUrl || item.api_task_id)).length === 0)
                 ? 'rgba(144, 220, 225, 0.3)'
                 : 'linear-gradient(135deg, #90dce1 0%, #6fc4cc 100%)',
               boxShadow: '0 10px 30px rgba(144, 220, 225, 0.2)',
@@ -333,75 +389,87 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
         </div>
       </div>
 
-      {/* Waterfall / Grid Display */}
-      <div className="columns-1 sm:columns-2 md:columns-3 lg:columns-4 gap-3 md:gap-4 space-y-3 md:space-y-4">
+      {/* Grid Display - 使用 Grid 替代 columns，Safari 下 columns 布局易出现内容不铺满、不滚动 */}
+      <div className="w-full grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
         {currentBatch.items.map((item) => {
           const isActioning = actionItemIds.includes(item.id);
           return (
-          <div 
-            key={item.id} 
-            className="break-inside-avoid relative group cursor-pointer overflow-hidden rounded-3xl bg-white/[0.04] backdrop-blur-xl border border-white/[0.08] hover:border-[#90dce1]/40 transition-all duration-300 hover:shadow-2xl mb-4"
+          <div
+            key={item.id}
+            className="relative group cursor-pointer overflow-hidden rounded-3xl bg-white/[0.04] backdrop-blur-xl border border-white/[0.08] hover:border-[#90dce1]/40 transition-all duration-300 hover:shadow-2xl"
             style={{ boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)' }}
             onClick={() => setSelectedItem(item)}
           >
             {/* Source preview overlay */}
             {item.sourceImage && (
               <div className="absolute top-2 left-2 z-30 w-8 h-8 rounded-lg border border-white/20 overflow-hidden shadow-lg opacity-80 group-hover:opacity-100 transition-opacity bg-black/20 pointer-events-none">
-                 <img 
-                   src={getFileUrl(item.sourceImage, 'images')} 
-                   className="w-full h-full object-cover"
-                   alt="Source image"
-                   onError={(e) => {
-                     // 如果图片加载失败，尝试使用完整 URL
-                     const target = e.target as HTMLImageElement;
-                     if (!target.src.includes('api/files')) {
-                       target.src = getFileUrl(item.sourceImage, 'images');
-                     }
-                   }}
-                 />
-            </div>
+                {isProxyMediaPath(item.sourceImage) ? (
+                  <ResolvedImage
+                    batchId={currentBatch.id}
+                    itemId={item.id}
+                    sourceImage={item.sourceImage}
+                    className="w-full h-full object-cover"
+                    alt="Source image"
+                  />
+                ) : (
+                  <img
+                    src={getFileUrl(item.sourceImage, 'images')}
+                    className="w-full h-full object-cover"
+                    alt="Source image"
+                    onError={(e) => {
+                      const target = e.target as HTMLImageElement;
+                      if (!target.src.includes('api/files')) {
+                        target.src = getFileUrl(item.sourceImage, 'images');
+                      }
+                    }}
+                  />
+                )}
+              </div>
             )}
 
             {/* Main result image (video preview or placeholder) */}
-            {item.status === 'completed' && item.videoUrl && item.videoUrl.trim() ? (
+            {item.status === 'completed' && (item.videoUrl?.trim() || item.api_task_id) ? (
               <div className="relative w-full aspect-[9/16] bg-black overflow-hidden">
-                {/* 使用源图片作为预览图 */}
                 {item.sourceImage ? (
-                  <img 
-                    src={getFileUrl(item.sourceImage, 'images')} 
-                    alt={`Video Preview ${item.id}`}
-                    className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105 relative z-0" 
-                    loading="eager"
-                    decoding="async"
-                    style={{ 
-                      display: 'block',
-                      opacity: 1,
-                      visibility: 'visible',
-                      minHeight: '100%',
-                      minWidth: '100%',
-                      position: 'relative',
-                      zIndex: 0
-                    }}
-                    onError={(e) => {
-                      const target = e.target as HTMLImageElement;
-                      console.error('Image load error for item:', item.id, 'sourceImage:', item.sourceImage, 'Current src:', target.src);
-                      // 如果当前 URL 不包含 api/files，尝试重新构建
-                      if (!target.src.includes('api/files')) {
-                        const newUrl = getFileUrl(item.sourceImage, 'images');
-                        if (newUrl !== target.src) {
-                          target.src = newUrl;
+                  isProxyMediaPath(item.sourceImage) ? (
+                    <ResolvedImage
+                      batchId={currentBatch.id}
+                      itemId={item.id}
+                      sourceImage={item.sourceImage}
+                      alt={`Video Preview ${item.id}`}
+                      className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105 relative z-0"
+                    />
+                  ) : (
+                    <img
+                      src={getFileUrl(item.sourceImage, 'images')}
+                      alt={`Video Preview ${item.id}`}
+                      className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105 relative z-0"
+                      loading="eager"
+                      decoding="async"
+                      style={{
+                        display: 'block',
+                        opacity: 1,
+                        visibility: 'visible',
+                        minHeight: '100%',
+                        minWidth: '100%',
+                        position: 'relative',
+                        zIndex: 0,
+                      }}
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        if (!target.src.includes('api/files')) {
+                          target.src = getFileUrl(item.sourceImage, 'images');
                         }
-                      }
-                    }}
-                    onLoad={(e) => {
-                      // 确保图片显示
-                      const target = e.target as HTMLImageElement;
-                      target.style.opacity = '1';
-                      target.style.visibility = 'visible';
-                      target.style.display = 'block';
-                      target.style.zIndex = '0';
-                    }}
-                  />
+                      }}
+                      onLoad={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        target.style.opacity = '1';
+                        target.style.visibility = 'visible';
+                        target.style.display = 'block';
+                        target.style.zIndex = '0';
+                      }}
+                    />
+                  )
                 ) : (
                   <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-[#90dce1]/10 to-[#6fc4cc]/10">
                     <p className="text-gray-400 text-sm">无预览图</p>
@@ -509,36 +577,30 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
             </button>
             
             <div className="aspect-[9/16] w-full bg-black relative">
-              {selectedItem.videoUrl && selectedItem.videoUrl.trim() && selectedItem.status === 'completed' && !videoLoadError ? (
-                <video 
-                  src={selectedItem.videoUrl} 
-                  controls 
+              {resolvedVideoUrl && selectedItem.status === 'completed' && !videoLoadError ? (
+                <video
+                  src={resolvedVideoUrl}
+                  controls
                   className="w-full h-full object-contain"
                   autoPlay
-                  onError={(e) => {
-                    console.error('Video load error:', selectedItem.videoUrl);
-                    setVideoLoadError('视频加载失败');
-                  }}
-                  onLoadStart={() => {
-                    setVideoLoadError(null);
-                  }}
+                  onError={() => setVideoLoadError('视频加载失败')}
+                  onLoadStart={() => setVideoLoadError(null)}
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center">
-                  <div className="p-8 backdrop-blur-xl border rounded-2xl text-center max-w-[80%]" style={{ 
-                    background: videoLoadError ? 'rgba(255, 59, 48, 0.1)' : 'rgba(144, 220, 225, 0.1)', 
-                    borderColor: videoLoadError ? 'rgba(255, 59, 48, 0.3)' : 'rgba(144, 220, 225, 0.3)' 
+                  <div className="p-8 backdrop-blur-xl border rounded-2xl text-center max-w-[80%]" style={{
+                    background: videoLoadError ? 'rgba(255, 59, 48, 0.1)' : 'rgba(144, 220, 225, 0.1)',
+                    borderColor: videoLoadError ? 'rgba(255, 59, 48, 0.3)' : 'rgba(144, 220, 225, 0.3)',
                   }}>
                     {videoLoadError ? (
                       <>
                         <p className="text-white font-semibold mb-2 text-red-400">视频加载失败</p>
                         <p className="text-sm text-red-300">无法加载视频，请检查网络连接或稍后重试</p>
-                        <p className="text-xs text-gray-400 mt-2 break-all">{selectedItem.videoUrl}</p>
                       </>
-                    ) : selectedItem.status === 'completed' && (!selectedItem.videoUrl || !selectedItem.videoUrl.trim()) ? (
+                    ) : selectedItem.status === 'completed' && !resolvedVideoUrl ? (
                       <>
                         <p className="text-white font-semibold mb-2">视频尚未生成</p>
-                        <p className="text-sm" style={{ color: '#90dce1' }}>视频生成完成但 URL 不可用</p>
+                        <p className="text-sm" style={{ color: '#90dce1' }}>正在获取视频地址…</p>
                       </>
                     ) : selectedItem.status === 'processing' ? (
                       <>
@@ -600,15 +662,15 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
                       {t.cancel || '取消'}
                     </button>
                   )}
-                   <button 
-                     onClick={() => selectedItem && selectedItem.videoUrl && handleDownloadVideo(selectedItem.videoUrl, selectedItem.id)}
-                     disabled={!selectedItem || !selectedItem.videoUrl || selectedItem.status !== 'completed'}
+                   <button
+                     onClick={() => selectedItem && resolvedVideoUrl && handleDownloadVideo(resolvedVideoUrl, selectedItem.id)}
+                     disabled={!selectedItem || !resolvedVideoUrl || selectedItem.status !== 'completed'}
                      className="px-6 py-2.5 text-white font-semibold rounded-xl transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
-                     style={{ 
-                       background: (!selectedItem || !selectedItem.videoUrl || selectedItem.status !== 'completed')
+                     style={{
+                       background: (!selectedItem || !resolvedVideoUrl || selectedItem.status !== 'completed')
                          ? 'rgba(144, 220, 225, 0.3)'
                          : 'linear-gradient(135deg, #90dce1 0%, #6fc4cc 100%)',
-                       boxShadow: '0 8px 20px rgba(144, 220, 225, 0.2)'
+                       boxShadow: '0 8px 20px rgba(144, 220, 225, 0.2)',
                      }}
                    >
                      {t.downloadMp4}
