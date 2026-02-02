@@ -68,42 +68,8 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang, batchIm
     setCurrentBatch(batch);
   }, [batch.id, batch]);
 
-  // 下载单个视频
-  const handleDownloadVideo = async (videoUrl: string, itemId: string): Promise<void> => {
-    if (!videoUrl) {
-      throw new Error(t.videoNotReady || '视频尚未生成完成');
-    }
-
-    return new Promise((resolve) => {
-      // 使用直接下载链接（最简单可靠的方法，支持跨域）
-      const link = document.createElement('a');
-      link.href = videoUrl;
-      link.download = `video_${itemId}_${Date.now()}.mp4`;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      
-      // 添加点击事件监听
-      const handleClick = () => {
-        // 给浏览器一些时间处理下载
-        setTimeout(() => {
-          resolve();
-        }, 300);
-      };
-      
-      link.addEventListener('click', handleClick, { once: true });
-      
-      // 尝试触发下载
-      document.body.appendChild(link);
-      link.click();
-      
-      // 延迟移除，确保点击事件被触发
-      setTimeout(() => {
-        document.body.removeChild(link);
-        // 如果点击事件没有触发，也 resolve（浏览器可能阻止了下载，但会打开新标签页）
-        resolve();
-      }, 200);
-    });
-  };
+  // 下载单个视频（移动端用真实 <a> 点击，避免程序触发的 click 被忽略）
+  const getDownloadFilename = (itemId: string) => `video_${itemId}_${Date.now()}.mp4`;
 
   // 批量下载所有已完成的视频（前端直接下载，不经过后端打包；URL 由 export 接口按 result_url 返回）
   const handleExportAll = async () => {
@@ -677,19 +643,31 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang, batchIm
                       {t.cancel || '取消'}
                     </button>
                   )}
-                   <button
-                     onClick={() => selectedItem && resolvedVideoUrl && handleDownloadVideo(resolvedVideoUrl, selectedItem.id)}
-                     disabled={!selectedItem || !resolvedVideoUrl || selectedItem.status !== 'completed'}
-                     className="px-6 py-2.5 text-white font-semibold rounded-xl transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
-                     style={{
-                       background: (!selectedItem || !resolvedVideoUrl || selectedItem.status !== 'completed')
-                         ? 'rgba(144, 220, 225, 0.3)'
-                         : 'linear-gradient(135deg, #90dce1 0%, #6fc4cc 100%)',
-                       boxShadow: '0 8px 20px rgba(144, 220, 225, 0.2)',
-                     }}
-                   >
-                     {t.downloadMp4}
-                   </button>
+                   {selectedItem && resolvedVideoUrl && selectedItem.status === 'completed' ? (
+                     <a
+                       href={resolvedVideoUrl}
+                       download={getDownloadFilename(selectedItem.id)}
+                       target="_blank"
+                       rel="noopener noreferrer"
+                       className="px-6 py-2.5 text-white font-semibold rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl inline-flex items-center justify-center"
+                       style={{
+                         background: 'linear-gradient(135deg, #90dce1 0%, #6fc4cc 100%)',
+                         boxShadow: '0 8px 20px rgba(144, 220, 225, 0.2)',
+                       }}
+                     >
+                       {t.downloadMp4}
+                     </a>
+                   ) : (
+                     <span
+                       className="px-6 py-2.5 text-white font-semibold rounded-xl transition-all duration-200 opacity-40 cursor-not-allowed shadow-lg inline-flex items-center justify-center"
+                       style={{
+                         background: 'rgba(144, 220, 225, 0.3)',
+                         boxShadow: '0 8px 20px rgba(144, 220, 225, 0.2)',
+                       }}
+                     >
+                       {t.downloadMp4}
+                     </span>
+                   )}
                  </div>
                </div>
             </div>
