@@ -316,6 +316,9 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
               <div className="flex flex-wrap items-center gap-3 md:gap-5 text-xs text-gray-400">
                 <span>✅ {currentBatch.progress.completed} {t.completed || '已完成'}</span>
                 <span>⏳ {currentBatch.progress.processing} {t.processing || '处理中'}</span>
+                {(currentBatch.progress.queued ?? 0) > 0 && (
+                  <span>📋 {currentBatch.progress.queued} {t.queued || '排队中'}</span>
+                )}
                 <span>⏸️ {currentBatch.progress.pending} {t.pending || '等待中'}</span>
                 {currentBatch.progress.failed > 0 && (
                   <span className="text-red-400">❌ {currentBatch.progress.failed} {t.failed || '失败'}</span>
@@ -538,6 +541,10 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
                   <div className="text-center text-gray-400">
                     <p className="text-xs">🚫 {t.cancelled || 'Cancelled'}</p>
                   </div>
+                ) : item.status === 'pending' && !item.api_task_id ? (
+                  <div className="text-center text-gray-400">
+                    <p className="text-xs">📋 {t.queued || '排队中'}</p>
+                  </div>
                 ) : (
                   <div className="text-center text-gray-400">
                     <p className="text-xs">⏸️ {t.pending || 'Pending'}</p>
@@ -617,6 +624,11 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
                         <p className="text-white font-semibold mb-2 text-gray-400">任务已取消</p>
                         <p className="text-sm" style={{ color: '#90dce1' }}>已停止生成，不会扣除积分</p>
                       </>
+                    ) : selectedItem.status === 'pending' && !selectedItem.api_task_id ? (
+                      <>
+                        <p className="text-white font-semibold mb-2">排队中</p>
+                        <p className="text-sm" style={{ color: '#90dce1' }}>正在提交到服务器，请稍候</p>
+                      </>
                     ) : (
                       <>
                         <p className="text-white font-semibold mb-2">等待处理</p>
@@ -653,7 +665,7 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
                       {t.retry || '重试'}
                     </button>
                   )}
-                  {(selectedItem.status === 'pending' || selectedItem.status === 'processing') && (
+                  {((selectedItem.status === 'pending' && selectedItem.api_task_id) || selectedItem.status === 'processing') && (
                     <button
                       onClick={() => handleCancelItem(selectedItem.id)}
                       disabled={isSelectedActioning}

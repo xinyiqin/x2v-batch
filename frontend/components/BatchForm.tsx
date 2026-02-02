@@ -111,6 +111,7 @@ export const BatchForm: React.FC<BatchFormProps> = ({ onCreated, lang, userCredi
           completed: 0,
           processing: 0,
           pending: images.length,
+          queued: images.length,
           failed: 0,
         },
       };

@@ -210,6 +210,7 @@ class Batch:
                 "completed": 0,
                 "processing": 0,
                 "pending": 0,
+                "queued": 0,
                 "failed": 0,
                 "cancelled": 0,
             }
@@ -218,6 +219,8 @@ class Batch:
         completed = sum(1 for item in self.items if item.status == VideoItemStatus.COMPLETED)
         processing = sum(1 for item in self.items if item.status == VideoItemStatus.PROCESSING)
         pending = sum(1 for item in self.items if item.status == VideoItemStatus.PENDING)
+        # 排队中：尚未提交到后端（无 api_task_id）
+        queued = sum(1 for item in self.items if item.status == VideoItemStatus.PENDING and not item.api_task_id)
         failed = sum(1 for item in self.items if item.status == VideoItemStatus.FAILED)
         cancelled = sum(1 for item in self.items if item.status == VideoItemStatus.CANCELLED)
         
@@ -227,6 +230,7 @@ class Batch:
             "completed": completed,
             "processing": processing,
             "pending": pending,
+            "queued": queued,
             "failed": failed,
             "cancelled": cancelled,
         }

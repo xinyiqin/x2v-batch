@@ -472,7 +472,7 @@ async def create_batch(
     audio_b64 = base64.b64encode(audio_data).decode("utf-8")
     audio_filename = audio.filename or "audio.wav"
 
-    # 先创建批次（仅 display 用文件名，不存媒体）
+    # 先创建批次（仅 display 用文件名，不存媒体）；每个 item 已有临时 id，暂无 api_task_id，前端显示「排队中」
     batch_name = f"批次 {user_info['username']} {asyncio.get_event_loop().time()}"
     batch = await task_manager.create_batch(
         user_id=user["user_id"],
@@ -493,43 +493,79 @@ async def create_batch(
             detail="LightX2V token not configured",
         )
 
-    # 并发提交所有任务，拿到 task_id 写入 item（避免串行提交导致 45s+ 延迟）
-    prompt_text = batch.prompt or "根据音频生成对应视频"
-
-    async def submit_one(i: int, item: Any):
-        image_b64 = base64.b64encode(image_datas[i]).decode("utf-8")
-        submit_out = await lightx2v_api.submit_task(
+    # 立即返回 batch_id，前端跳转详情；后台按「一次最多 3 个 + 错峰 + 重试」提交，提交成功后写入正式 api_task_id
+    asyncio.create_task(
+        _submit_batch_tasks(
+            batch_id=batch.id,
+            image_datas=image_datas,
+            audio_b64=audio_b64,
+            prompt_text=batch.prompt or "根据音频生成对应视频",
             base_url=base_url,
-            access_token=token,
-            prompt=prompt_text,
-            input_image={"type": "base64", "data": image_b64},
-            input_audio={"type": "base64", "data": audio_b64},
+            token=token,
         )
-        if not submit_out.get("success"):
-            err = submit_out.get("error", "Unknown error")
+    )
+    return {"batch_id": batch.id}
+
+
+# 后端限制：user_visit_frequency≈0.05s、user_max_active_tasks=3；错峰 + 最多 3 个并发 + 重试
+_SUBMIT_CONCURRENCY = 3
+_SUBMIT_STAGGER_SEC = 0.06
+_SUBMIT_RETRY_ATTEMPTS = 3
+_SUBMIT_RETRY_BASE_SEC = 1
+
+
+async def _submit_batch_tasks(
+    batch_id: str,
+    image_datas: list[bytes],
+    audio_b64: str,
+    prompt_text: str,
+    base_url: str,
+    token: str,
+) -> None:
+    """后台：按 3 个并发 + 错峰提交，成功后写 api_task_id，全部完成后启动轮询并 save_batch。"""
+    batch = task_manager.get_batch(batch_id)
+    if not batch or not batch.items:
+        return
+    sem = asyncio.Semaphore(_SUBMIT_CONCURRENCY)
+
+    async def submit_one(i: int, item: Any) -> None:
+        await asyncio.sleep(i * _SUBMIT_STAGGER_SEC)  # 错峰，满足后端 visit_frequency
+        async with sem:
+            image_b64 = base64.b64encode(image_datas[i]).decode("utf-8")
+            last_err = None
+            for attempt in range(_SUBMIT_RETRY_ATTEMPTS):
+                submit_out = await lightx2v_api.submit_task(
+                    base_url=base_url,
+                    access_token=token,
+                    prompt=prompt_text,
+                    input_image={"type": "base64", "data": image_b64},
+                    input_audio={"type": "base64", "data": audio_b64},
+                )
+                if submit_out.get("success"):
+                    api_task_id = submit_out.get("task_id")
+                    if api_task_id:
+                        await task_manager.update_video_item(
+                            batch_id=batch_id,
+                            item_id=item.id,
+                            api_task_id=api_task_id,
+                            persist=False,
+                        )
+                    return
+                last_err = submit_out.get("error", "Unknown error")
+                if attempt < _SUBMIT_RETRY_ATTEMPTS - 1:
+                    await asyncio.sleep(_SUBMIT_RETRY_BASE_SEC * (attempt + 1))
+
             await task_manager.update_video_item(
-                batch_id=batch.id,
+                batch_id=batch_id,
                 item_id=item.id,
                 status=VideoItemStatus.PENDING,
-                error_msg=f"Submit failed: {err}",
-                persist=False,
-            )
-            return
-        api_task_id = submit_out.get("task_id")
-        if api_task_id:
-            await task_manager.update_video_item(
-                batch_id=batch.id,
-                item_id=item.id,
-                api_task_id=api_task_id,
+                error_msg=f"Submit failed: {last_err}",
                 persist=False,
             )
 
     await asyncio.gather(*[submit_one(i, item) for i, item in enumerate(batch.items)])
-
-    # 先启动轮询（只读内存），再持久化；S3 不必在 process_batch 之前完成
-    asyncio.create_task(batch_processor.process_batch(batch.id))
-    asyncio.create_task(task_manager.save_batch(batch.id))
-    return {"batch_id": batch.id}
+    asyncio.create_task(batch_processor.process_batch(batch_id))
+    asyncio.create_task(task_manager.save_batch(batch_id))
 
 
 def _item_input_url_path(batch_id: str, item_id: str, name: str = "input_image") -> str:

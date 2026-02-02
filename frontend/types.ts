@@ -16,6 +16,7 @@ export interface BatchProgress {
   completed: number;
   processing: number;
   pending: number;
+  queued?: number;  // 排队中（尚未提交到后端）
   failed: number;
   cancelled?: number;
 }
