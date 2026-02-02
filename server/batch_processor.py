@@ -41,7 +41,6 @@ class BatchProcessor:
 
         logger.info(f"Processing batch {batch_id} (poll only), {len(batch.items)} items")
         batch.status = BatchStatus.PROCESSING
-        await self.task_manager._save_batch(batch)
 
         semaphore = asyncio.Semaphore(3)
 
@@ -55,7 +54,7 @@ class BatchProcessor:
         batch = self.task_manager.get_batch(batch_id)
         if batch:
             batch.update_status()
-            await self.task_manager._save_batch(batch)
+            await self.task_manager.save_batch_if_terminal(batch_id)
             await self._charge_completed_batch(batch.id)
         logger.info(f"Batch {batch_id} processing (poll) completed")
 
@@ -72,6 +71,7 @@ class BatchProcessor:
             item_id=item.id,
             status=VideoItemStatus.PROCESSING,
             estimated_duration=60,
+            persist=False,
         )
 
         result = await lightx2v_api.wait_for_task(
@@ -93,7 +93,9 @@ class BatchProcessor:
                 item_id=item.id,
                 status=VideoItemStatus.FAILED,
                 error_msg=err,
+                persist=False,
             )
+            await self.task_manager.save_batch_if_terminal(batch_id)
             return
 
         status = (result.get("status") or "UNKNOWN").upper()
@@ -103,6 +105,7 @@ class BatchProcessor:
                 item_id=item.id,
                 status=VideoItemStatus.COMPLETED,
                 error_msg=None,
+                persist=False,
             )
             logger.info(f"Item {item.id} completed (use result_url API for URL)")
         elif status == "CANCELLED":
@@ -111,6 +114,7 @@ class BatchProcessor:
                 item_id=item.id,
                 status=VideoItemStatus.CANCELLED,
                 error_msg="Cancelled",
+                persist=False,
             )
         else:
             await self.task_manager.update_video_item(
@@ -118,7 +122,9 @@ class BatchProcessor:
                 item_id=item.id,
                 status=VideoItemStatus.FAILED,
                 error_msg=f"Task status: {status}",
+                persist=False,
             )
+        await self.task_manager.save_batch_if_terminal(batch_id)
 
     async def cancel_item(self, batch_id: str, item_id: str) -> bool:
         batch = self.task_manager.get_batch(batch_id)
@@ -142,7 +148,9 @@ class BatchProcessor:
             item_id=item_id,
             status=VideoItemStatus.CANCELLED,
             error_msg="Cancelled by user",
+            persist=False,
         )
+        await self.task_manager.save_batch_if_terminal(batch_id)
         await self._charge_completed_batch(batch_id)
         return True
 

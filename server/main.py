@@ -512,6 +512,7 @@ async def create_batch(
                 item_id=item.id,
                 status=VideoItemStatus.PENDING,
                 error_msg=f"Submit failed: {err}",
+                persist=False,
             )
             return
         api_task_id = submit_out.get("task_id")
@@ -520,9 +521,11 @@ async def create_batch(
                 batch_id=batch.id,
                 item_id=item.id,
                 api_task_id=api_task_id,
+                persist=False,
             )
 
     await asyncio.gather(*[submit_one(i, item) for i, item in enumerate(batch.items)])
+    await task_manager.save_batch(batch.id)
 
     # 后台轮询状态（不存 result_url，前端用 result_url 接口按需取）
     asyncio.create_task(batch_processor.process_batch(batch.id))

@@ -503,6 +503,31 @@ class TaskManager:
             logger.error(f"Failed to load batch {batch_id} from S3: {e}")
             return None
     
+    def _batch_is_terminal(self, batch: Batch) -> bool:
+        """批次是否已终态：所有 item 均为 COMPLETED/FAILED/CANCELLED。"""
+        if not batch or not batch.items:
+            return False
+        return all(
+            item.status in (VideoItemStatus.COMPLETED, VideoItemStatus.FAILED, VideoItemStatus.CANCELLED)
+            for item in batch.items
+        )
+
+    async def save_batch(self, batch_id: str) -> bool:
+        """主动将批次持久化到存储（供 create_batch 等调用）。"""
+        batch = self._batches.get(batch_id)
+        if not batch:
+            return False
+        await self._save_batch(batch)
+        return True
+
+    async def save_batch_if_terminal(self, batch_id: str) -> bool:
+        """仅当批次已终态时持久化，减少 S3 写入次数。"""
+        batch = self._batches.get(batch_id)
+        if not batch or not self._batch_is_terminal(batch):
+            return False
+        await self._save_batch(batch)
+        return True
+
     async def _save_batch(self, batch: Batch):
         """保存批次到存储（支持本地文件或 S3）- 异步版本"""
         # 检查是否是 S3DataManager
@@ -582,8 +607,7 @@ class TaskManager:
         )
         
         self._batches[batch.id] = batch
-        await self._save_batch(batch)
-        
+        # 不在此处持久化，由 main.create_batch 在设置完所有 api_task_id 后统一 save_batch 一次
         logger.info(f"Created batch {batch_id} with {len(items)} items, credits used: {credits_used}")
         return batch
     
@@ -617,33 +641,27 @@ class TaskManager:
         error_msg: Optional[str] = None,
         api_task_id: Optional[str] = None,
         estimated_duration: Optional[int] = None,
+        persist: bool = True,
     ) -> bool:
         """
-        更新视频子项（异步）
-        
-        Returns:
-            是否成功
+        更新视频子项（异步）。persist=False 时只更新内存，不写 S3，由调用方在适当时机 save_batch/save_batch_if_terminal。
         """
         batch = self._batches.get(batch_id)
         if not batch:
             return False
-        
+
         item = next((item for item in batch.items if item.id == item_id), None)
         if not item:
             return False
-        
-        # 状态变更时更新时间戳
+
         if status is not None:
             old_status = item.status
             item.status = status
-            
-            # 状态变为 PROCESSING 时记录开始时间
             if status == VideoItemStatus.PROCESSING and old_status != VideoItemStatus.PROCESSING:
                 item.started_at = datetime.now()
-            # 状态变为 COMPLETED、FAILED 或 CANCELLED 时记录完成时间
             elif status in [VideoItemStatus.COMPLETED, VideoItemStatus.FAILED, VideoItemStatus.CANCELLED]:
                 item.completed_at = datetime.now()
-        
+
         if video_filename is not None:
             item.video_filename = video_filename
         if video_url is not None:
@@ -654,11 +672,11 @@ class TaskManager:
             item.api_task_id = api_task_id
         if estimated_duration is not None:
             item.estimated_duration = estimated_duration
-        
+
         item.updated_at = datetime.now()
         batch.update_status()
-        await self._save_batch(batch)
-        
+        if persist:
+            await self._save_batch(batch)
         return True
     
     def get_video_item(self, batch_id: str, item_id: str) -> Optional[VideoItem]:
