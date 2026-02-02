@@ -93,7 +93,7 @@ class VideoItem:
         return 0.0
     
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
+        """转换为字典。注意：API 层会对有 api_task_id 的 item 把 sourceImage 覆盖为 input_url 路径，无 api_task_id 时覆盖为 ""，避免前端请求 /api/files/ 导致 404。"""
         return {
             "id": self.id,
             "sourceImage": self.source_image_filename,

@@ -4,8 +4,7 @@ import { Batch, VideoItem } from '../types';
 import { translations, Language } from '../translations';
 
 interface BatchFormProps {
-  // Fixed: Changed from (batch: Batch) to (batch: any) because userId and userName are added in App.tsx
-  onCreated: (batch: any) => void;
+  onCreated: (batch: any, imageBlobUrls?: string[]) => void;
   lang: Language;
   userCredits: number;
 }
@@ -94,7 +93,9 @@ export const BatchForm: React.FC<BatchFormProps> = ({ onCreated, lang, userCredi
 
       const response = await createBatch(images, audio, prompt.trim() || "");
 
-      // 先跳转到详情，不等待 getBatch；用最小 batch 对象让 App 切到 gallery，详情由 App 后台拉取
+      // 前端图片缓存：为本次 batch 生成 blob URL，供详情页所有任务缩略图使用；完成的任务才走 input_url
+      const imageBlobUrls = images.map((f) => URL.createObjectURL(f));
+
       const minimalBatch: Batch = {
         id: response.batch_id,
         userId: '',
@@ -115,7 +116,7 @@ export const BatchForm: React.FC<BatchFormProps> = ({ onCreated, lang, userCredi
           failed: 0,
         },
       };
-      onCreated(minimalBatch);
+      onCreated(minimalBatch, imageBlobUrls);
 
       setImages([]);
       setAudio(null);

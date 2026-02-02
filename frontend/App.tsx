@@ -20,6 +20,8 @@ const App: React.FC = () => {
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
   const [tokenValid, setTokenValid] = useState<boolean | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  /** 提交 batch 时的前端图片缓存 (batchId -> blob URLs)，用于详情页缩略图；完成的任务才走 input_url */
+  const [batchImageCache, setBatchImageCache] = useState<Record<string, string[]>>({});
 
   const t = translations[lang];
 
@@ -109,6 +111,8 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
+    Object.values(batchImageCache).flat().forEach((url) => URL.revokeObjectURL(url));
+    setBatchImageCache({});
     clearToken();
     setActiveUser(null);
     setCurrentViewState('create');
@@ -117,14 +121,17 @@ const App: React.FC = () => {
     setAllUsers([]);
   };
 
-  const handleCreateBatch = useCallback((newBatch: Batch) => {
+  const handleCreateBatch = useCallback((newBatch: Batch, imageBlobUrls?: string[]) => {
     if (!activeUser) return;
 
     setBatches(prev => [newBatch, ...prev]);
     setSelectedBatchId(newBatch.id);
     setCurrentViewState('gallery');
 
-    // 后台拉取完整批次详情（提交后已直接跳转，不阻塞）
+    if (imageBlobUrls?.length) {
+      setBatchImageCache(prev => ({ ...prev, [newBatch.id]: imageBlobUrls }));
+    }
+
     getBatch(newBatch.id)
       .then((fullBatch: Batch) => {
         setBatches(prev => prev.map(b => (b.id === fullBatch.id ? fullBatch : b)));
@@ -347,7 +354,7 @@ const App: React.FC = () => {
           ) : currentViewState === 'gallery' ? (
             <div className="animate-in slide-in-from-right-4 duration-500">
               {selectedBatchId && selectedBatch ? (
-                <BatchGallery key={selectedBatchId} batch={selectedBatch} lang={lang} />
+                <BatchGallery key={selectedBatchId} batch={selectedBatch} lang={lang} batchImageCache={batchImageCache} />
               ) : selectedBatchId ? (
                 <div className="text-center text-gray-500 py-20">
                   <p>{t.batchNotFound}</p>

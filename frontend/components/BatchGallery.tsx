@@ -17,6 +17,8 @@ import {
 interface BatchGalleryProps {
   batch: Batch;
   lang: Language;
+  /** 提交时的前端图片缓存 (batchId -> blob URLs)，优先作缩略图；完成的任务才走 input_url */
+  batchImageCache?: Record<string, string[]>;
 }
 
 /** 当 sourceImage 为 input_url 代理路径时，先 fetch 取真实 URL 再渲染 img */
@@ -50,7 +52,7 @@ function ResolvedImage({
   return <img src={src} className={className} alt={alt || ''} onError={onError} onLoad={onLoad} />;
 }
 
-export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
+export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang, batchImageCache }) => {
   const t = translations[lang];
   const [selectedItem, setSelectedItem] = useState<VideoItem | null>(null);
   const [currentBatch, setCurrentBatch] = useState<Batch>(batch);
@@ -394,8 +396,9 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
 
       {/* Grid Display - 使用 Grid 替代 columns，Safari 下 columns 布局易出现内容不铺满、不滚动 */}
       <div className="w-full grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
-        {currentBatch.items.map((item) => {
+        {currentBatch.items.map((item, index) => {
           const isActioning = actionItemIds.includes(item.id);
+          const cachedThumb = batchImageCache?.[currentBatch.id]?.[index];
           return (
           <div
             key={item.id}
@@ -403,10 +406,12 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
             style={{ boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)' }}
             onClick={() => setSelectedItem(item)}
           >
-            {/* Source preview overlay */}
-            {item.sourceImage && (
+            {/* 缩略图：优先前端缓存，完成的任务才走 input_url */}
+            {(cachedThumb || item.sourceImage) && (
               <div className="absolute top-2 left-2 z-30 w-8 h-8 rounded-lg border border-white/20 overflow-hidden shadow-lg opacity-80 group-hover:opacity-100 transition-opacity bg-black/20 pointer-events-none">
-                {isProxyMediaPath(item.sourceImage) ? (
+                {cachedThumb ? (
+                  <img src={cachedThumb} className="w-full h-full object-cover" alt="Source image" />
+                ) : item.status === 'completed' && item.api_task_id && isProxyMediaPath(item.sourceImage) ? (
                   <ResolvedImage
                     batchId={currentBatch.id}
                     itemId={item.id}
@@ -414,7 +419,7 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
                     className="w-full h-full object-cover"
                     alt="Source image"
                   />
-                ) : (
+                ) : item.sourceImage && !isProxyMediaPath(item.sourceImage) ? (
                   <img
                     src={getFileUrl(item.sourceImage, 'images')}
                     className="w-full h-full object-cover"
@@ -426,53 +431,51 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang }) => {
                       }
                     }}
                   />
-                )}
+                ) : null}
               </div>
             )}
 
             {/* Main result image (video preview or placeholder) */}
             {item.status === 'completed' && (item.videoUrl?.trim() || item.api_task_id) ? (
               <div className="relative w-full aspect-[9/16] bg-black overflow-hidden">
-                {item.sourceImage ? (
-                  isProxyMediaPath(item.sourceImage) ? (
-                    <ResolvedImage
-                      batchId={currentBatch.id}
-                      itemId={item.id}
-                      sourceImage={item.sourceImage}
-                      alt={`Video Preview ${item.id}`}
-                      className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105 relative z-0"
-                    />
-                  ) : (
-                    <img
-                      src={getFileUrl(item.sourceImage, 'images')}
-                      alt={`Video Preview ${item.id}`}
-                      className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105 relative z-0"
-                      loading="eager"
-                      decoding="async"
-                      style={{
-                        display: 'block',
-                        opacity: 1,
-                        visibility: 'visible',
-                        minHeight: '100%',
-                        minWidth: '100%',
-                        position: 'relative',
-                        zIndex: 0,
-                      }}
-                      onError={(e) => {
-                        const target = e.target as HTMLImageElement;
-                        if (!target.src.includes('api/files')) {
-                          target.src = getFileUrl(item.sourceImage, 'images');
-                        }
-                      }}
-                      onLoad={(e) => {
-                        const target = e.target as HTMLImageElement;
-                        target.style.opacity = '1';
-                        target.style.visibility = 'visible';
-                        target.style.display = 'block';
-                        target.style.zIndex = '0';
-                      }}
-                    />
-                  )
+                {cachedThumb ? (
+                  <img
+                    src={cachedThumb}
+                    alt={`Video Preview ${item.id}`}
+                    className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105 relative z-0"
+                    loading="eager"
+                    decoding="async"
+                  />
+                ) : item.sourceImage && isProxyMediaPath(item.sourceImage) ? (
+                  <ResolvedImage
+                    batchId={currentBatch.id}
+                    itemId={item.id}
+                    sourceImage={item.sourceImage}
+                    alt={`Video Preview ${item.id}`}
+                    className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105 relative z-0"
+                  />
+                ) : item.sourceImage ? (
+                  <img
+                    src={getFileUrl(item.sourceImage, 'images')}
+                    alt={`Video Preview ${item.id}`}
+                    className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105 relative z-0"
+                    loading="eager"
+                    decoding="async"
+                    style={{ display: 'block', opacity: 1, visibility: 'visible', minHeight: '100%', minWidth: '100%', position: 'relative', zIndex: 0 }}
+                    onError={(e) => {
+                      const target = e.target as HTMLImageElement;
+                      if (!target.src.includes('api/files')) {
+                        target.src = getFileUrl(item.sourceImage, 'images');
+                      }
+                    }}
+                    onLoad={(e) => {
+                      const target = e.target as HTMLImageElement;
+                      target.style.opacity = '1';
+                      target.style.visibility = 'visible';
+                      target.style.display = 'block';
+                      target.style.zIndex = '0';
+                    }}
+                  />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-[#90dce1]/10 to-[#6fc4cc]/10">
                     <p className="text-gray-400 text-sm">无预览图</p>

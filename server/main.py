@@ -14,7 +14,7 @@ from io import BytesIO
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 import uvicorn
@@ -587,7 +587,9 @@ async def get_batches(
         for item in batch_dict["items"]:
             if item.get("api_task_id"):
                 item["sourceImage"] = _item_input_url_path(batch.id, item["id"], "input_image")
-            # 否则保留 display 用 sourceImage 或空
+            else:
+                # 无 api_task_id（排队中/历史数据）：不返回纯文件名，避免前端请求 /api/files/ 导致 404
+                item["sourceImage"] = ""
         result.append(batch_dict)
     return {"batches": result, "total": len(result)}
 
@@ -613,6 +615,9 @@ async def get_batch(
     for item in batch_dict["items"]:
         if item.get("api_task_id"):
             item["sourceImage"] = _item_input_url_path(batch_id, item["id"], "input_image")
+        else:
+            # 无 api_task_id（排队中/历史）：不返回纯文件名，避免前端请求 /api/files/ 导致 404
+            item["sourceImage"] = ""
     return batch_dict
 
 
@@ -977,6 +982,8 @@ async def get_all_batches(
         for item in batch_dict.get("items", []):
             if item.get("api_task_id"):
                 item["sourceImage"] = _item_input_url_path(batch.id, item["id"], "input_image")
+            else:
+                item["sourceImage"] = ""  # 避免前端请求 /api/files/
         result.append(batch_dict)
     logger.info(f"Returning {len(result)} batches to admin")
     return {"batches": result, "total": len(result)}
@@ -984,33 +991,53 @@ async def get_all_batches(
 
 # ==================== 文件服务接口 ====================
 
+def _mime_type_for_filename(filename: str) -> str:
+    """根据文件名返回 MIME 类型"""
+    lower = filename.lower()
+    if lower.endswith((".jpg", ".jpeg")):
+        return "image/jpeg"
+    if lower.endswith(".png"):
+        return "image/png"
+    if lower.endswith(".gif"):
+        return "image/gif"
+    if lower.endswith((".mp4", ".avi", ".mov", ".mkv")):
+        return "video/mp4"
+    return "application/octet-stream"
+
+
+# 何时还会用 /api/files/：① 历史数据（旧批次 item 的 sourceImage 为纯文件名时，已改为无 api_task_id 时返回 "" 避免请求）；
+# ② 其他存于 data_manager 的文件（如用户头像、导出包等）。batch 的输入图/结果视频现均走 input_url/result_url。
 @app.get("/api/files/{subdir}/{filename:path}")
 async def get_file(subdir: str, filename: str):
-    """获取文件（支持 URL 编码的文件名）"""
+    """获取文件（支持 URL 编码；LocalDataManager 用路径，S3DataManager 用 load_bytes）"""
     from urllib.parse import unquote
-    
-    # 解码 URL 编码的文件名（处理空格和特殊字符）
+
     decoded_filename = unquote(filename)
-    file_path = data_manager._get_path(decoded_filename, subdir)
-    
-    if not file_path.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"File not found: {decoded_filename}"
-        )
-    
-    # 设置正确的 MIME 类型
-    mime_type = "application/octet-stream"
-    if decoded_filename.lower().endswith((".jpg", ".jpeg")):
-        mime_type = "image/jpeg"
-    elif decoded_filename.lower().endswith(".png"):
-        mime_type = "image/png"
-    elif decoded_filename.lower().endswith(".gif"):
-        mime_type = "image/gif"
-    elif decoded_filename.lower().endswith((".mp4", ".avi", ".mov", ".mkv")):
-        mime_type = "video/mp4"
-    
-    return FileResponse(str(file_path), media_type=mime_type)
+    mime_type = _mime_type_for_filename(decoded_filename)
+
+    if hasattr(data_manager, "_get_path"):
+        file_path = data_manager._get_path(decoded_filename, subdir)
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"File not found: {decoded_filename}",
+            )
+        return FileResponse(str(file_path), media_type=mime_type)
+
+    if hasattr(data_manager, "load_bytes"):
+        try:
+            content = await data_manager.load_bytes(decoded_filename, subdir)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"File not found: {decoded_filename}",
+            )
+        return Response(content=content, media_type=mime_type)
+
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Data manager does not support file retrieval",
+    )
 
 
 if __name__ == "__main__":
