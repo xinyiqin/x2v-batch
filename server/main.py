@@ -454,7 +454,7 @@ async def create_batch(
     # 读入内存，不写 S3
     audio_data = await audio.read()
     audio_duration = await get_audio_duration(audio_data)
-    credits_per_video = 1 if audio_duration <= 30 else math.ceil(audio_duration / 30)
+    credits_per_video = 1 if audio_duration <= 40 else math.ceil(audio_duration / 40)
     required_credits = credits_per_video * len(images)
     if user_info["credits"] < required_credits:
         raise HTTPException(

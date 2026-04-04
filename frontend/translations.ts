@@ -142,7 +142,7 @@ export const translations = {
     costInfo: "消耗: {count} 灵感值",
     creditsPerVideo: "每个视频",
     videos: "个视频",
-    creditRuleInfo: "灵感值规则：≤30秒 = 1灵感值/视频，>30秒 = 向上取整(时长/30)灵感值/视频",
+    creditRuleInfo: "灵感值规则：≤40秒 = 1灵感值/视频，>40秒 = 向上取整(时长/40)灵感值/视频",
     audioDuration: "时长",
     logout: "退出登录",
     adminPanel: "管理面板",

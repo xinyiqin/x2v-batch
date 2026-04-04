@@ -62,14 +62,46 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang, batchIm
   const [videoLoadError, setVideoLoadError] = useState<string | null>(null);
   /** 详情弹窗中已完成的 item 通过 result_url 接口取到的视频 URL */
   const [resolvedVideoUrl, setResolvedVideoUrl] = useState<string | null>(null);
+  /** 单视频下载中（fetch 成 blob 再触发下载，兼容移动端） */
+  const [downloadVideoLoading, setDownloadVideoLoading] = useState(false);
 
   // 当 batch prop 改变时，更新 currentBatch
   useEffect(() => {
     setCurrentBatch(batch);
   }, [batch.id, batch]);
 
-  // 下载单个视频（移动端用真实 <a> 点击，避免程序触发的 click 被忽略）
-  const getDownloadFilename = (itemId: string) => `video_${itemId}_${Date.now()}.mp4`;
+  // 参考 lightx2v 前端：先 fetch 成 blob，再用 blob URL 触发下载（移动端对同源 blob 更友好）
+  const handleDownloadVideo = async (videoUrl: string, itemId: string) => {
+    if (!videoUrl) {
+      alert(t.videoNotReady || '视频尚未生成完成');
+      return;
+    }
+    setDownloadVideoLoading(true);
+    try {
+      const response = await fetch(videoUrl);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const filename = `video_${itemId}_${Date.now()}.mp4`;
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(objectUrl);
+    } catch (e) {
+      console.error('Download video failed:', e);
+      // 跨域时 fetch 会失败，移动端退化为新开页打开，用户可长按保存
+      try {
+        window.open(videoUrl, '_blank', 'noopener,noreferrer');
+      } catch {
+        alert(lang === 'zh' ? '下载失败，请重试或在新标签页打开链接' : 'Download failed, please retry or open link in new tab');
+      }
+    } finally {
+      setDownloadVideoLoading(false);
+    }
+  };
 
   // 批量下载所有已完成的视频（前端直接下载，不经过后端打包；URL 由 export 接口按 result_url 返回）
   const handleExportAll = async () => {
@@ -643,31 +675,30 @@ export const BatchGallery: React.FC<BatchGalleryProps> = ({ batch, lang, batchIm
                       {t.cancel || '取消'}
                     </button>
                   )}
-                   {selectedItem && resolvedVideoUrl && selectedItem.status === 'completed' ? (
-                     <a
-                       href={resolvedVideoUrl}
-                       download={getDownloadFilename(selectedItem.id)}
-                       target="_blank"
-                       rel="noopener noreferrer"
-                       className="px-6 py-2.5 text-white font-semibold rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl inline-flex items-center justify-center"
-                       style={{
-                         background: 'linear-gradient(135deg, #90dce1 0%, #6fc4cc 100%)',
-                         boxShadow: '0 8px 20px rgba(144, 220, 225, 0.2)',
-                       }}
-                     >
-                       {t.downloadMp4}
-                     </a>
-                   ) : (
-                     <span
-                       className="px-6 py-2.5 text-white font-semibold rounded-xl transition-all duration-200 opacity-40 cursor-not-allowed shadow-lg inline-flex items-center justify-center"
-                       style={{
-                         background: 'rgba(144, 220, 225, 0.3)',
-                         boxShadow: '0 8px 20px rgba(144, 220, 225, 0.2)',
-                       }}
-                     >
-                       {t.downloadMp4}
-                     </span>
-                   )}
+                   <button
+                     type="button"
+                     onClick={() => selectedItem && resolvedVideoUrl && selectedItem.status === 'completed' && handleDownloadVideo(resolvedVideoUrl, selectedItem.id)}
+                     disabled={!selectedItem || !resolvedVideoUrl || selectedItem.status !== 'completed' || downloadVideoLoading}
+                     className="px-6 py-2.5 text-white font-semibold rounded-xl transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg hover:shadow-xl inline-flex items-center justify-center gap-2"
+                     style={{
+                       background: (!selectedItem || !resolvedVideoUrl || selectedItem.status !== 'completed' || downloadVideoLoading)
+                         ? 'rgba(144, 220, 225, 0.3)'
+                         : 'linear-gradient(135deg, #90dce1 0%, #6fc4cc 100%)',
+                       boxShadow: '0 8px 20px rgba(144, 220, 225, 0.2)',
+                     }}
+                   >
+                     {downloadVideoLoading ? (
+                       <>
+                         <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                         </svg>
+                         {lang === 'zh' ? '准备下载…' : 'Preparing…'}
+                       </>
+                     ) : (
+                       t.downloadMp4
+                     )}
+                   </button>
                  </div>
                </div>
             </div>

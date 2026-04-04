@@ -23,11 +23,14 @@ export const BatchForm: React.FC<BatchFormProps> = ({ onCreated, lang, userCredi
   const audioInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // 计算每个视频的积分：音频长度 ≤ 30s = 1积分，> 30s = ceil(时长/30)积分
+  /** 每 1 积分覆盖的音频时长（秒），与后端 create_batch 扣费规则一致 */
+  const CREDIT_AUDIO_SECONDS = 40;
+
+  // 计算每个视频的积分：音频长度 ≤ CREDIT_AUDIO_SECONDS = 1积分，否则 ceil(时长/CREDIT_AUDIO_SECONDS)
   const calculateCreditsPerVideo = (duration: number | null): number => {
     if (!duration) return 1; // 默认1积分
-    if (duration <= 30) return 1;
-    return Math.ceil(duration / 30);
+    if (duration <= CREDIT_AUDIO_SECONDS) return 1;
+    return Math.ceil(duration / CREDIT_AUDIO_SECONDS);
   };
 
   // 计算总积分：每个视频积分 × 图片数量
@@ -283,7 +286,7 @@ export const BatchForm: React.FC<BatchFormProps> = ({ onCreated, lang, userCredi
             </div>
             {audioDuration && (
               <div className="text-xs text-gray-400">
-                {t.creditRuleInfo || 'Credit rule: ≤30s = 1 credit/video, >30s = ceil(duration/30) credits/video'}
+                {t.creditRuleInfo || `Credit rule: ≤${CREDIT_AUDIO_SECONDS}s = 1 credit/video, >${CREDIT_AUDIO_SECONDS}s = ceil(duration/${CREDIT_AUDIO_SECONDS}) credits/video`}
               </div>
             )}
           </div>
